@@ -1,0 +1,14 @@
+# Claude Code settings
+.claude/
+
+# Compiled binaries (root only)
+/ziminfo
+/zimcat
+/zimserve
+/zimsearch
+/zimverify
+/*.test
+
+# Test data (large ZIM files)
+testdata/*.zim
+!testdata/small.zim
