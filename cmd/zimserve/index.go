@@ -11,8 +11,9 @@ func (lib *library) writeIndexPage(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'")
-	fmt.Fprint(w, `<!DOCTYPE html>
+fmt.Fprint(w, `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>zimserve</title>
+` + faviconLink + `
 <style>
 body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }
 h1 { border-bottom: 1px solid #ddd; padding-bottom: 10px; }
@@ -74,7 +75,11 @@ a:hover { text-decoration: underline; }
 <th data-col="1">File<span class="arrow"></span></th>
 <th data-col="2">Date<span class="arrow"></span></th>
 <th data-col="3" class="num">Entries<span class="arrow"></span></th>
-<th style="width:40px"></th>
+`)
+	if !lib.noInfo {
+		fmt.Fprint(w, `<th style="width:40px"></th>`)
+	}
+	fmt.Fprint(w, `
 </tr></thead><tbody>`)
 	for _, slug := range lib.slugs {
 		e := lib.archives[slug]
@@ -112,12 +117,16 @@ a:hover { text-decoration: underline; }
 			dateDisplay = "—"
 		}
 
-		fmt.Fprintf(w, "<tr><td data-val=%q>%s</td><td data-val=%q>%s</td><td data-val=%q class=\"date\">%s</td><td data-val=%q class=\"num\">%d</td><td><a href=\"/%s/-/info\" title=\"File info\">&#x2139;&#xFE0E;</a></td></tr>",
+		infoCell := ""
+		if !lib.noInfo {
+			infoCell = fmt.Sprintf(`<td><a href="/%s/-/info" title="File info">&#x2139;&#xFE0E;</a></td>`, html.EscapeString(slug))
+		}
+		fmt.Fprintf(w, "<tr><td data-val=%q>%s</td><td data-val=%q>%s</td><td data-val=%q class=\"date\">%s</td><td data-val=%q class=\"num\">%d</td>%s</tr>",
 			e.title, titleCell,
 			e.filename, fileCell,
 			dateVal, html.EscapeString(dateDisplay),
 			fmt.Sprintf("%d", e.archive.EntryCount()), e.archive.EntryCount(),
-			html.EscapeString(slug))
+			infoCell)
 	}
 	fmt.Fprint(w, `</tbody></table>
 <script>
@@ -201,5 +210,6 @@ a:hover { text-decoration: underline; }
   });
 })();
 </script>
+` + footerBarHTML() + `
 </body></html>`)
 }

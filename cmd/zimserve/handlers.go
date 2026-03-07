@@ -7,7 +7,7 @@ import (
 	"html"
 	"io"
 	"log"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -167,9 +167,13 @@ func (lib *library) handleSearchPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Search — %s</title>
+` + faviconLink + `
 <style>
-body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
-h1 { font-size: 1.4em; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }
+h1 { border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 4px; }
+h1 a { color: inherit; text-decoration: none; }
+h1 a:hover { text-decoration: none; }
+h2 { font-size: 1.15em; margin: 4px 0 16px; color: #333; }
 form { margin-bottom: 20px; display: flex; gap: 8px; }
 form input[type=text] { flex: 1; padding: 8px 12px; font-size: 1em; border: 1px solid #ccc; border-radius: 4px; }
 form input[type=text]:focus { outline: none; border-color: #0366d6; }
@@ -180,7 +184,7 @@ form button { padding: 8px 16px; font-size: 1em; border: 1px solid #ccc; border-
 .nav { margin-top: 10px; font-size: 0.9em; }
 .nav a { color: #0366d6; }
 </style></head><body>
-<h1>Search — <a href="/%s/">%s</a></h1>
+<h1><a href="/">📚 Library</a></h1><h2>Search — <a href="/%s/">%s</a></h2>
 <form method="get">
 <input type="text" name="q" value="%s" placeholder="Search articles..." autofocus>
 <button type="submit">Search</button>
@@ -203,6 +207,7 @@ form button { padding: 8px 16px; font-size: 1em; border: 1px solid #ccc; border-
 
 	fmt.Fprintf(w, `<div class="nav"><a href="/">Library</a> · <a href="/%s/">Back to main page</a> · <a href="/%s/-/browse">Browse</a> · <a href="/%s/-/random">Random article</a></div>`,
 		html.EscapeString(slug), html.EscapeString(slug), html.EscapeString(slug))
+	fmt.Fprint(w, footerBarHTML())
 	fmt.Fprint(w, `</body></html>`)
 }
 
@@ -246,7 +251,7 @@ func (lib *library) handleRandom(w http.ResponseWriter, r *http.Request) {
 
 // handleRandomAll serves GET /_random — picks a random ZIM, then a random article.
 func (lib *library) handleRandomAll(w http.ResponseWriter, r *http.Request) {
-	slug := lib.slugs[rand.Intn(len(lib.slugs))]
+	slug := lib.slugs[rand.IntN(len(lib.slugs))]
 	ze := lib.archives[slug]
 
 	entry, err := randomArticle(ze.archive)
@@ -297,9 +302,13 @@ func (lib *library) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Browse — %s</title>
+` + faviconLink + `
 <style>
-body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
-h1 { font-size: 1.4em; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }
+h1 { border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 4px; }
+h1 a { color: inherit; text-decoration: none; }
+h1 a:hover { text-decoration: none; }
+h2 { font-size: 1.15em; margin: 4px 0 16px; color: #333; }
 .total { color: #666; font-size: 0.9em; margin: -6px 0 16px; }
 .letters { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 20px; }
 .letters a { display: inline-block; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; text-decoration: none; color: #0366d6; font-weight: bold; }
@@ -315,7 +324,7 @@ h1 { font-size: 1.4em; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
 .nav { margin-top: 24px; font-size: 0.9em; }
 .nav a { color: #0366d6; }
 </style></head><body>
-<h1>Browse — <a href="/%s/">%s</a></h1>
+<h1><a href="/">📚 Library</a></h1><h2>Browse — <a href="/%s/">%s</a></h2>
 <p class="total">%s articles total</p>
 <div class="letters">`,
 		html.EscapeString(ze.title),
@@ -433,6 +442,7 @@ h1 { font-size: 1.4em; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
 
 	fmt.Fprintf(w, `<div class="nav"><a href="/">Library</a> · <a href="/%s/">Back to main page</a> · <a href="/%s/-/search">Search</a> · <a href="/%s/-/random">Random article</a></div>`,
 		html.EscapeString(slug), html.EscapeString(slug), html.EscapeString(slug))
+	fmt.Fprint(w, footerBarHTML())
 	fmt.Fprint(w, `</body></html>`)
 }
 
@@ -547,7 +557,7 @@ func (lib *library) handleContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("ETag", etag)
 
-	// For text/html content, inject a navigation header bar.
+	// For text/html content, inject a navigation header bar and footer bar.
 	if entry.MIMEType() == "text/html" {
 		body, err := io.ReadAll(reader)
 		if err != nil {
@@ -557,6 +567,7 @@ func (lib *library) handleContent(w http.ResponseWriter, r *http.Request) {
 		}
 		bar := headerBarHTML(slug, ze.title, ze.archive)
 		body = injectHeaderBar(body, []byte(bar))
+		body = injectFooterBar(body, []byte(footerBarHTML()))
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
 		w.Write(body)
 		return
@@ -588,6 +599,32 @@ func injectHeaderBar(body, bar []byte) []byte {
 	return result
 }
 
+// footerBarHTML returns a self-contained HTML+CSS footer bar for injection into pages.
+func footerBarHTML() string {
+	return `<style>
+#gzim-footer{position:fixed;bottom:0;left:0;right:0;z-index:999998;background:#f6f8fa;border-top:1px solid #d0d7de;padding:4px 12px;font:12px/1.4 system-ui,sans-serif;display:flex;align-items:center;justify-content:center;gap:8px;color:#666}
+#gzim-footer a{color:#0366d6;text-decoration:none;display:inline-flex;align-items:center;gap:3px}
+#gzim-footer a:hover{text-decoration:underline}
+body{padding-bottom:32px!important}
+</style>
+<div id="gzim-footer"><a href="https://github.com/stazelabs/gozim"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>zimserve</a><span>·</span><a href="/_docs">Documentation</a><span>·</span><a href="https://github.com/stazelabs/gozim/blob/main/LICENSE">Apache 2.0</a></div>`
+}
+
+// injectFooterBar inserts the footer bar HTML before the closing </body> tag.
+// If no </body> tag is found, it appends the bar to the content.
+func injectFooterBar(body, bar []byte) []byte {
+	lower := bytes.ToLower(body)
+	idx := bytes.Index(lower, []byte("</body"))
+	if idx == -1 {
+		return append(body, bar...)
+	}
+	result := make([]byte, 0, len(body)+len(bar))
+	result = append(result, body[:idx]...)
+	result = append(result, bar...)
+	result = append(result, body[idx:]...)
+	return result
+}
+
 // headerBarHTML returns a self-contained HTML+CSS navigation bar for injection into ZIM pages.
 func headerBarHTML(slug, title string, a *zim.Archive) string {
 	es := html.EscapeString(slug)
@@ -614,9 +651,9 @@ body{padding-top:0!important}
 </style>`)
 
 	b.WriteString(`<div id="gzim-bar">`)
-	fmt.Fprintf(&b, `<a href="/" title="Library">📚</a>`)
+	b.WriteString(`<a href="/">📚</a>`)
 	b.WriteString(`<span class="gzim-sep">|</span>`)
-	fmt.Fprintf(&b, `<a class="gzim-title" href="/%s/" title="%s">%s</a>`, es, et, et)
+	fmt.Fprintf(&b, `<a class="gzim-title" href="/%s/">%s</a>`, es, et)
 	fmt.Fprintf(&b, `<form action="/%s/-/search" method="get"><input type="text" name="q" placeholder="Search…"><button class="gzim-btn" type="submit">Search</button></form>`, es)
 	fmt.Fprintf(&b, `<a class="gzim-btn" href="/%s/-/random">Random</a>`, es)
 

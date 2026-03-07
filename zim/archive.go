@@ -1,11 +1,10 @@
 package zim
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"iter"
-	"math/big"
+	"math/rand/v2"
 	"sync"
 )
 
@@ -30,6 +29,36 @@ type Archive struct {
 	clusterCache map[uint32]*cluster
 	cacheSize    int
 	cacheOrder   []uint32 // simple LRU tracking
+	cacheHits    int64
+	cacheMisses  int64
+}
+
+// CacheStats holds runtime statistics for the cluster LRU cache.
+type CacheStats struct {
+	Capacity int   // configured maximum number of cached clusters
+	Size     int   // number of clusters currently cached
+	Hits     int64 // total cache hits since archive was opened
+	Misses   int64 // total cache misses since archive was opened
+	Bytes    int64 // estimated bytes held by currently cached clusters
+}
+
+// CacheStats returns a snapshot of the cluster cache statistics.
+func (a *Archive) CacheStats() CacheStats {
+	a.clusterMu.Lock()
+	defer a.clusterMu.Unlock()
+	var bytes int64
+	for _, c := range a.clusterCache {
+		for _, b := range c.blobs {
+			bytes += int64(len(b))
+		}
+	}
+	return CacheStats{
+		Capacity: a.cacheSize,
+		Size:     len(a.clusterCache),
+		Hits:     a.cacheHits,
+		Misses:   a.cacheMisses,
+		Bytes:    bytes,
+	}
 }
 
 type options struct {
@@ -491,11 +520,8 @@ func (a *Archive) RandomEntry(ns byte) (Entry, error) {
 	if count == 0 {
 		return Entry{}, ErrNotFound
 	}
-	n, err := rand.Int(rand.Reader, big.NewInt(int64(count)))
-	if err != nil {
-		return Entry{}, fmt.Errorf("zim: random: %w", err)
-	}
-	return a.EntryByIndex(lo + uint32(n.Int64()))
+	n := rand.IntN(int(count))
+	return a.EntryByIndex(lo + uint32(n))
 }
 
 // Illustration returns the illustration (icon/favicon) of the given pixel size.
@@ -509,6 +535,86 @@ func (a *Archive) Illustration(size int) ([]byte, error) {
 	return entry.ReadContent()
 }
 
+// ClusterMeta holds per-cluster metadata readable without decompression.
+type ClusterMeta struct {
+	Offset         uint64 // byte offset in ZIM file
+	CompressedSize uint64 // bytes on disk
+	Compression    string // "none", "xz", "zstd", "unknown"
+	Extended       bool   // uses 8-byte blob offsets
+}
+
+// ClusterMetaAt returns metadata for cluster n without decompressing it.
+// Only reads the cluster pointer and the first info byte.
+func (a *Archive) ClusterMetaAt(n uint32) (ClusterMeta, error) {
+	if n >= a.hdr.ClusterCount {
+		return ClusterMeta{}, fmt.Errorf("zim: cluster %d out of range (max %d)", n, a.hdr.ClusterCount)
+	}
+	ptrOffset := int64(a.hdr.ClusterPtrPos) + int64(n)*8
+	ptrBuf := make([]byte, 16)
+	if _, err := a.r.ReadAt(ptrBuf, ptrOffset); err != nil {
+		return ClusterMeta{}, fmt.Errorf("zim: read cluster pointer %d: %w", n, err)
+	}
+	clusterOffset := binary.LittleEndian.Uint64(ptrBuf[0:8])
+	var clusterEnd uint64
+	if n+1 < a.hdr.ClusterCount {
+		clusterEnd = binary.LittleEndian.Uint64(ptrBuf[8:16])
+	} else {
+		clusterEnd = a.hdr.ChecksumPos
+	}
+	var infoBuf [1]byte
+	if _, err := a.r.ReadAt(infoBuf[:], int64(clusterOffset)); err != nil {
+		return ClusterMeta{}, fmt.Errorf("zim: read cluster %d info byte: %w", n, err)
+	}
+	compName := "unknown"
+	switch infoBuf[0] & clusterCompMask {
+	case compNone:
+		compName = "none"
+	case compLZMA:
+		compName = "xz"
+	case compZstd:
+		compName = "zstd"
+	}
+	return ClusterMeta{
+		Offset:         clusterOffset,
+		CompressedSize: clusterEnd - clusterOffset,
+		Compression:    compName,
+		Extended:       infoBuf[0]&clusterExtendedBit != 0,
+	}, nil
+}
+
+// ClusterBlobSizes returns the decompressed size of each blob in cluster n.
+// Decompresses the cluster (result is cached by the internal LRU cache).
+func (a *Archive) ClusterBlobSizes(n uint32) ([]int, error) {
+	c, err := a.readCluster(n)
+	if err != nil {
+		return nil, err
+	}
+	sizes := make([]int, len(c.blobs))
+	for i, b := range c.blobs {
+		sizes[i] = len(b)
+	}
+	return sizes, nil
+}
+
+// EntriesInCluster returns all content entries belonging to cluster n.
+// Iterates all entries; O(EntryCount).
+func (a *Archive) EntriesInCluster(n uint32) ([]Entry, error) {
+	if n >= a.hdr.ClusterCount {
+		return nil, fmt.Errorf("zim: cluster %d out of range", n)
+	}
+	var result []Entry
+	for i := uint32(0); i < a.hdr.EntryCount; i++ {
+		e, err := a.EntryByIndex(i)
+		if err != nil {
+			return nil, err
+		}
+		if !e.IsRedirect() && e.clusterNum == n {
+			result = append(result, e)
+		}
+	}
+	return result, nil
+}
+
 // readCluster reads, decompresses, and caches a cluster by number.
 func (a *Archive) readCluster(clusterNum uint32) (*cluster, error) {
 	a.clusterMu.Lock()
@@ -516,6 +622,7 @@ func (a *Archive) readCluster(clusterNum uint32) (*cluster, error) {
 
 	// Check cache and promote to back (most-recently-used)
 	if c, ok := a.clusterCache[clusterNum]; ok {
+		a.cacheHits++
 		for i, v := range a.cacheOrder {
 			if v == clusterNum {
 				a.cacheOrder = append(a.cacheOrder[:i], a.cacheOrder[i+1:]...)
@@ -525,6 +632,7 @@ func (a *Archive) readCluster(clusterNum uint32) (*cluster, error) {
 		}
 		return c, nil
 	}
+	a.cacheMisses++
 
 	if clusterNum >= a.hdr.ClusterCount {
 		return nil, fmt.Errorf("zim: cluster %d out of range (max %d)", clusterNum, a.hdr.ClusterCount)

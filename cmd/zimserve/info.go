@@ -83,9 +83,12 @@ func (lib *library) handleInfo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Info — %s</title>
+` + faviconLink + `
 <style>
-body { font-family: system-ui, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }
-h1 { font-size: 1.4em; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }
+h1 { border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 4px; }
+h1 a { color: inherit; text-decoration: none; }
+h1 a:hover { text-decoration: none; }
 h2 { font-size: 1.15em; margin-top: 28px; color: #333; }
 table { border-collapse: collapse; width: 100%%; margin-bottom: 16px; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eee; }
@@ -102,7 +105,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 a { color: #0366d6; text-decoration: none; }
 a:hover { text-decoration: underline; }
 </style></head><body>
-<h1>Info — <a href="/%s/">%s</a></h1>
+<h1><a href="/">📚 Library</a></h1><h2>Info — <a href="/%s/">%s</a></h2>
 <div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a></div>`,
 		html.EscapeString(ze.title),
 		html.EscapeString(slug), html.EscapeString(ze.title))
@@ -113,7 +116,14 @@ a:hover { text-decoration: underline; }
 	fmt.Fprintf(w, `<tr><th>UUID</th><td class="mono">%s</td></tr>`, uuidStr)
 	fmt.Fprintf(w, `<tr><th>ZIM Version</th><td>%d.%d</td></tr>`, a.MajorVersion(), a.MinorVersion())
 	fmt.Fprintf(w, `<tr><th>Entry Count</th><td>%d</td></tr>`, a.EntryCount())
-	fmt.Fprintf(w, `<tr><th>Cluster Count</th><td>%d</td></tr>`, a.ClusterCount())
+	fmt.Fprintf(w, `<tr><th>Cluster Count</th><td><a href="/%s/-/info/cluster">%d</a></td></tr>`, html.EscapeString(slug), a.ClusterCount())
+	cs := a.CacheStats()
+	hitRate := "—"
+	if total := cs.Hits + cs.Misses; total > 0 {
+		hitRate = fmt.Sprintf("%.1f%%", 100*float64(cs.Hits)/float64(total))
+	}
+	fmt.Fprintf(w, `<tr><th>Cluster Cache</th><td>%d / %d slots used &nbsp;·&nbsp; %s hit rate (%d hits, %d misses) &nbsp;·&nbsp; %s cached</td></tr>`,
+		cs.Size, cs.Capacity, hitRate, cs.Hits, cs.Misses, formatBytes(cs.Bytes))
 
 	yesNo := func(b bool) string {
 		if b {
@@ -206,13 +216,17 @@ a:hover { text-decoration: underline; }
 
 	fmt.Fprintf(w, `<div class="nav"><a href="/">Library</a> · <a href="/%s/">Main page</a> · <a href="/%s/-/search">Search</a> · <a href="/%s/-/browse">Browse</a></div>`,
 		html.EscapeString(slug), html.EscapeString(slug), html.EscapeString(slug))
+	fmt.Fprint(w, footerBarHTML())
 	fmt.Fprint(w, `</body></html>`)
 }
 
 // infoPageCSS is the shared stylesheet for info drill-down pages.
 const infoPageCSS = `
-body { font-family: system-ui, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }
-h1 { font-size: 1.4em; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }
+h1 { border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 4px; }
+h1 a { color: inherit; text-decoration: none; }
+h1 a:hover { text-decoration: none; }
+h2 { font-size: 1.15em; margin-top: 28px; color: #333; }
 table { border-collapse: collapse; width: 100%%; margin-bottom: 16px; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eee; }
 th { color: #555; font-weight: 600; }
@@ -327,8 +341,9 @@ func (lib *library) handleInfoNamespace(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Namespace %c — %s</title>
+` + faviconLink + `
 <style>%s</style></head><body>
-<h1>Namespace <code>%c</code> — <a href="/%s/-/info">%s</a></h1>
+<h1><a href="/">📚 Library</a></h1><h2>Namespace <code>%c</code> — <a href="/%s/-/info">%s</a></h2>
 <div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/%s/-/info">Info</a></div>`,
 		ns, html.EscapeString(ze.title),
 		infoPageCSS,
@@ -403,6 +418,7 @@ func (lib *library) handleInfoNamespace(w http.ResponseWriter, r *http.Request) 
 
 	fmt.Fprintf(w, `<div class="nav"><a href="/%s/-/info">Back to info</a></div>`,
 		html.EscapeString(slug))
+	fmt.Fprint(w, footerBarHTML())
 	fmt.Fprint(w, `</body></html>`)
 }
 
@@ -473,8 +489,9 @@ func (lib *library) handleInfoMIME(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>%s — %s</title>
+` + faviconLink + `
 <style>%s</style></head><body>
-<h1><code>%s</code> — <a href="/%s/-/info">%s</a></h1>
+<h1><a href="/">📚 Library</a></h1><h2><code>%s</code> — <a href="/%s/-/info">%s</a></h2>
 <div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/%s/-/info">Info</a></div>
 <p class="count">%d entries total</p>
 <table><tr><th style="width:60%%">Path</th><th>Title</th></tr>`,
@@ -518,6 +535,7 @@ func (lib *library) handleInfoMIME(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(w, `<div class="nav"><a href="/%s/-/info">Back to info</a></div>`,
 		html.EscapeString(slug))
+	fmt.Fprint(w, footerBarHTML())
 	fmt.Fprint(w, `</body></html>`)
 }
 
@@ -547,10 +565,11 @@ func (lib *library) handleInfoEntry(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Entry %d — %s</title>
+` + faviconLink + `
 <style>%s
 th { width: 160px; }
 </style></head><body>
-<h1>Entry #%d — <a href="/%s/-/info">%s</a></h1>
+<h1><a href="/">📚 Library</a></h1><h2>Entry #%d — <a href="/%s/-/info">%s</a></h2>
 <div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/%s/-/info">Info</a></div>
 <table>`,
 		idx, html.EscapeString(ze.title),
@@ -619,6 +638,203 @@ th { width: 160px; }
 	nsLink := fmt.Sprintf("/%s/-/info/ns?ns=%c", html.EscapeString(slug), e.Namespace())
 	fmt.Fprintf(w, `<div class="nav"><a href="/%s/-/info">Back to info</a> · <a href="%s">Namespace %c</a></div>`,
 		html.EscapeString(slug), nsLink, e.Namespace())
+	fmt.Fprint(w, footerBarHTML())
+	fmt.Fprint(w, `</body></html>`)
+}
+
+// handleInfoCluster serves GET /{slug}/-/info/cluster — cluster navigator.
+// Without ?n= shows a paginated table of all clusters (no decompression).
+// With ?n=X shows detail for cluster X, including blobs and entries.
+func (lib *library) handleInfoCluster(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	ze, ok := lib.archives[slug]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	a := ze.archive
+
+	nStr := r.URL.Query().Get("n")
+	if nStr != "" {
+		// --- Detail view ---
+		n64, err := strconv.ParseUint(nStr, 10, 32)
+		if err != nil || uint32(n64) >= a.ClusterCount() {
+			http.Error(w, "invalid cluster number", http.StatusBadRequest)
+			return
+		}
+		n := uint32(n64)
+
+		meta, err := a.ClusterMetaAt(n)
+		if err != nil {
+			http.Error(w, "failed to read cluster metadata: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Cluster %d — %s</title>
+` + faviconLink + `
+<style>%sth { width: 160px; }</style></head><body>
+<h1><a href="/">📚 Library</a></h1><h2>Cluster #%d — <a href="/%s/-/info">%s</a></h2>
+<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/%s/-/info">Info</a> · <a href="/%s/-/info/cluster">Clusters</a></div>`,
+			n, html.EscapeString(ze.title),
+			infoPageCSS,
+			n, html.EscapeString(slug), html.EscapeString(ze.title),
+			html.EscapeString(slug), html.EscapeString(slug))
+
+		fmt.Fprint(w, `<h2>Cluster Info</h2><table>`)
+		fmt.Fprintf(w, `<tr><th>Cluster #</th><td class="num">%d of %d</td></tr>`, n, a.ClusterCount())
+		fmt.Fprintf(w, `<tr><th>File Offset</th><td class="mono">0x%X (%d)</td></tr>`, meta.Offset, meta.Offset)
+		fmt.Fprintf(w, `<tr><th>Compressed Size</th><td>%s</td></tr>`, formatBytes(int64(meta.CompressedSize)))
+		fmt.Fprintf(w, `<tr><th>Compression</th><td class="mono">%s</td></tr>`, html.EscapeString(meta.Compression))
+		extStr := "No"
+		if meta.Extended {
+			extStr = "Yes"
+		}
+		fmt.Fprintf(w, `<tr><th>Extended Offsets</th><td>%s</td></tr>`, extStr)
+		fmt.Fprint(w, `</table>`)
+
+		// Blobs (requires decompression)
+		blobSizes, blobErr := a.ClusterBlobSizes(n)
+		if blobErr != nil {
+			fmt.Fprintf(w, `<p style="color:#cf222e">Decompression failed: %s</p>`, html.EscapeString(blobErr.Error()))
+		} else {
+			totalDecomp := int64(0)
+			for _, s := range blobSizes {
+				totalDecomp += int64(s)
+			}
+			fmt.Fprintf(w, `<h2>Blobs (%d total, %s decompressed)</h2>`, len(blobSizes), formatBytes(totalDecomp))
+			fmt.Fprint(w, `<table><tr><th style="width:80px">#</th><th style="text-align:right">Decompressed Size</th></tr>`)
+			for i, sz := range blobSizes {
+				fmt.Fprintf(w, `<tr><td class="num">%d</td><td class="num">%s</td></tr>`, i, formatBytes(int64(sz)))
+			}
+			fmt.Fprint(w, `</table>`)
+		}
+
+		// Entries in this cluster
+		entries, entErr := a.EntriesInCluster(n)
+		if entErr != nil {
+			fmt.Fprintf(w, `<p style="color:#cf222e">Error loading entries: %s</p>`, html.EscapeString(entErr.Error()))
+		} else if len(entries) > 0 {
+			fmt.Fprintf(w, `<h2>Entries (%d)</h2>`, len(entries))
+			fmt.Fprint(w, `<table><tr><th style="width:70px">Index</th><th>Path</th><th>Title</th></tr>`)
+			for _, e := range entries {
+				entryLink := fmt.Sprintf("/%s/-/info/entry?idx=%d", html.EscapeString(slug), e.Index())
+				var pathCell string
+				if e.Namespace() == 'C' {
+					pathCell = fmt.Sprintf(`<a href="/%s/%s">%s</a> <a href="%s" style="font-size:0.8em;color:#888" title="Entry details">&#x2139;&#xFE0E;</a>`,
+						html.EscapeString(slug), html.EscapeString(e.Path()), html.EscapeString(e.FullPath()), entryLink)
+				} else {
+					pathCell = fmt.Sprintf(`<a href="%s">%s</a>`, entryLink, html.EscapeString(e.FullPath()))
+				}
+				fmt.Fprintf(w, `<tr><td class="num">%d</td><td class="mono">%s</td><td>%s</td></tr>`,
+					e.Index(), pathCell, html.EscapeString(e.Title()))
+			}
+			fmt.Fprint(w, `</table>`)
+		} else {
+			fmt.Fprint(w, `<p>No content entries in this cluster.</p>`)
+		}
+
+		// Prev/next cluster navigation
+		fmt.Fprint(w, `<div class="pager">`)
+		if n > 0 {
+			fmt.Fprintf(w, `<a href="/%s/-/info/cluster?n=%d">← Cluster #%d</a>`,
+				html.EscapeString(slug), n-1, n-1)
+		}
+		if n+1 < a.ClusterCount() {
+			fmt.Fprintf(w, `<a href="/%s/-/info/cluster?n=%d">Cluster #%d →</a>`,
+				html.EscapeString(slug), n+1, n+1)
+		}
+		fmt.Fprint(w, `</div>`)
+
+		fmt.Fprintf(w, `<div class="nav"><a href="/%s/-/info/cluster">Back to clusters</a> · <a href="/%s/-/info">Info</a></div>`,
+			html.EscapeString(slug), html.EscapeString(slug))
+		fmt.Fprint(w, footerBarHTML())
+	fmt.Fprint(w, `</body></html>`)
+		return
+	}
+
+	// --- List view ---
+	offset, limit := parseOffsetLimit(r)
+	total := int(a.ClusterCount())
+
+	type clusterRow struct {
+		num      uint32
+		offset   uint64
+		size     uint64
+		comp     string
+		extended bool
+		err      error
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	rows := make([]clusterRow, 0, end-offset)
+	for i := offset; i < end; i++ {
+		meta, err := a.ClusterMetaAt(uint32(i))
+		if err != nil {
+			rows = append(rows, clusterRow{num: uint32(i), err: err})
+		} else {
+			rows = append(rows, clusterRow{
+				num:      uint32(i),
+				offset:   meta.Offset,
+				size:     meta.CompressedSize,
+				comp:     meta.Compression,
+				extended: meta.Extended,
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Clusters — %s</title>
+` + faviconLink + `
+<style>%s</style></head><body>
+<h1><a href="/">📚 Library</a></h1><h2>Clusters — <a href="/%s/-/info">%s</a></h2>
+<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/%s/-/info">Info</a></div>
+<p class="count">%d clusters total</p>`,
+		html.EscapeString(ze.title),
+		infoPageCSS,
+		html.EscapeString(slug), html.EscapeString(ze.title),
+		html.EscapeString(slug),
+		total)
+
+	fmt.Fprint(w, `<table><tr><th style="width:60px">#</th><th>Offset</th><th style="text-align:right">Compressed Size</th><th>Compression</th><th>Extended</th></tr>`)
+	for _, row := range rows {
+		if row.err != nil {
+			fmt.Fprintf(w, `<tr><td class="num"><a href="/%s/-/info/cluster?n=%d">%d</a></td><td colspan="4" style="color:#cf222e">%s</td></tr>`,
+				html.EscapeString(slug), row.num, row.num, html.EscapeString(row.err.Error()))
+			continue
+		}
+		extStr := ""
+		if row.extended {
+			extStr = "yes"
+		}
+		fmt.Fprintf(w, `<tr><td class="num"><a href="/%s/-/info/cluster?n=%d">%d</a></td><td class="mono">0x%X</td><td class="num">%s</td><td class="mono">%s</td><td>%s</td></tr>`,
+			html.EscapeString(slug), row.num, row.num,
+			row.offset, formatBytes(int64(row.size)),
+			html.EscapeString(row.comp), extStr)
+	}
+	fmt.Fprint(w, `</table>`)
+
+	baseURL := fmt.Sprintf("/%s/-/info/cluster", html.EscapeString(slug))
+	fmt.Fprint(w, `<div class="pager">`)
+	if offset > 0 {
+		prev := offset - limit
+		if prev < 0 {
+			prev = 0
+		}
+		fmt.Fprintf(w, `<a href="%s?offset=%d&limit=%d">Previous</a>`, baseURL, prev, limit)
+	}
+	if end < total {
+		fmt.Fprintf(w, `<a href="%s?offset=%d&limit=%d">Next</a>`, baseURL, offset+limit, limit)
+	}
+	fmt.Fprint(w, `</div>`)
+
+	fmt.Fprintf(w, `<div class="nav"><a href="/%s/-/info">Back to info</a></div>`,
+		html.EscapeString(slug))
+	fmt.Fprint(w, footerBarHTML())
 	fmt.Fprint(w, `</body></html>`)
 }
 

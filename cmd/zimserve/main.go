@@ -26,6 +26,7 @@ func main() {
 	var cacheSize int
 	var dirs []string
 	var recursive bool
+	var noInfo bool
 
 	cmd := &cobra.Command{
 		Use:   "zimserve [file.zim ...] [--dir <dir>]",
@@ -45,7 +46,7 @@ ZIM files may be specified as positional arguments, via --dir, or both.`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return serve(args, dirs, recursive, addr, cacheSize)
+			return serve(args, dirs, recursive, addr, cacheSize, noInfo)
 		},
 	}
 
@@ -53,6 +54,7 @@ ZIM files may be specified as positional arguments, via --dir, or both.`,
 	cmd.Flags().IntVarP(&cacheSize, "cache", "c", 64, "cluster cache size per ZIM file")
 	cmd.Flags().StringArrayVarP(&dirs, "dir", "d", nil, "directory of ZIM files to serve (repeatable)")
 	cmd.Flags().BoolVarP(&recursive, "recursive", "r", false, "scan --dir directories recursively")
+	cmd.Flags().BoolVar(&noInfo, "no-info", false, "disable info pages and hide the info icon")
 
 	if err := cmd.Execute(); err != nil {
 		os.Exit(1)
@@ -62,6 +64,7 @@ ZIM files may be specified as positional arguments, via --dir, or both.`,
 type library struct {
 	archives map[string]*zimEntry // slug -> entry
 	slugs    []string             // ordered list of slugs
+	noInfo   bool                 // hide info pages and icon
 }
 
 type zimEntry struct {
@@ -77,13 +80,14 @@ type zimEntry struct {
 	uuidHex     string // hex-encoded UUID for ETag generation
 }
 
-func serve(paths []string, dirs []string, recursive bool, addr string, cacheSize int) error {
+func serve(paths []string, dirs []string, recursive bool, addr string, cacheSize int, noInfo bool) error {
 	dirPaths := collectZIMPaths(dirs, recursive)
 	allPaths := append(paths, dirPaths...)
 	lib, err := loadLibrary(allPaths, len(paths), cacheSize)
 	if err != nil {
 		return err
 	}
+	lib.noInfo = noInfo
 	defer func() {
 		for _, entry := range lib.archives {
 			entry.archive.Close()
@@ -97,16 +101,22 @@ func serve(paths []string, dirs []string, recursive bool, addr string, cacheSize
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", lib.handleRoot)
+	mux.HandleFunc("/favicon.ico", handleFaviconSVG)
+	mux.HandleFunc("/_favicon.svg", handleFaviconSVG)
+	mux.HandleFunc("/_docs", handleDocs)
 	mux.HandleFunc("/_random", lib.handleRandomAll)
 	mux.HandleFunc("/_search", lib.handleSearchAll)
 	mux.HandleFunc("/{slug}/_search", lib.handleSearchJSON)
 	mux.HandleFunc("/{slug}/-/search", lib.handleSearchPage)
 	mux.HandleFunc("/{slug}/-/random", lib.handleRandom)
 	mux.HandleFunc("/{slug}/-/browse", lib.handleBrowse)
-	mux.HandleFunc("/{slug}/-/info", lib.handleInfo)
-	mux.HandleFunc("/{slug}/-/info/ns", lib.handleInfoNamespace)
-	mux.HandleFunc("/{slug}/-/info/mime", lib.handleInfoMIME)
-	mux.HandleFunc("/{slug}/-/info/entry", lib.handleInfoEntry)
+	if !noInfo {
+		mux.HandleFunc("/{slug}/-/info", lib.handleInfo)
+		mux.HandleFunc("/{slug}/-/info/ns", lib.handleInfoNamespace)
+		mux.HandleFunc("/{slug}/-/info/mime", lib.handleInfoMIME)
+		mux.HandleFunc("/{slug}/-/info/entry", lib.handleInfoEntry)
+		mux.HandleFunc("/{slug}/-/info/cluster", lib.handleInfoCluster)
+	}
 	mux.HandleFunc("/{slug}/{path...}", lib.handleContent)
 
 	srv := &http.Server{
@@ -265,6 +275,18 @@ func makeETag(ze *zimEntry, entryPath string) string {
 	h.Write([]byte(ze.uuidHex))
 	h.Write([]byte(entryPath))
 	return `"` + hex.EncodeToString(h.Sum(nil)) + `"`
+}
+
+// faviconSVG is the SVG content served at /_favicon.svg.
+const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">📚</text></svg>`
+
+// faviconLink is the HTML link tag referencing the favicon by URL.
+const faviconLink = `<link rel="icon" type="image/svg+xml" href="/_favicon.svg">`
+
+func handleFaviconSVG(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Write([]byte(faviconSVG))
 }
 
 // securityHeaders adds OWASP-recommended response headers to every response.
