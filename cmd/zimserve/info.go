@@ -198,7 +198,8 @@ a:hover { text-decoration: underline; }
 	if len(mimeTypes) > 0 {
 		fmt.Fprint(w, `<h2>Registered MIME Types</h2><table><tr><th style="width:60px">Index</th><th>MIME Type</th></tr>`)
 		for i, m := range mimeTypes {
-			fmt.Fprintf(w, `<tr><td>%d</td><td class="mono">%s</td></tr>`, i, html.EscapeString(m))
+			fmt.Fprintf(w, `<tr><td>%d</td><td class="mono"><a href="/%s/-/info/ns?ns=C&amp;type=%s">%s</a></td></tr>`,
+				i, html.EscapeString(slug), html.EscapeString(m), html.EscapeString(m))
 		}
 		fmt.Fprint(w, `</table>`)
 	}

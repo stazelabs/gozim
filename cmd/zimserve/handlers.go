@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -543,9 +544,94 @@ func (lib *library) handleContent(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", mime)
 	}
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("ETag", etag)
 
+	// For text/html content, inject a navigation header bar.
+	if entry.MIMEType() == "text/html" {
+		body, err := io.ReadAll(reader)
+		if err != nil {
+			log.Printf("error reading html content for %s/%s: %v", slug, contentPath, err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		bar := headerBarHTML(slug, ze.title, ze.archive)
+		body = injectHeaderBar(body, []byte(bar))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		w.Write(body)
+		return
+	}
+
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
 	io.Copy(w, reader)
+}
+
+// injectHeaderBar inserts the header bar HTML after the opening <body...> tag.
+// If no <body> tag is found, it prepends the bar to the content.
+func injectHeaderBar(body, bar []byte) []byte {
+	// Case-insensitive search for <body
+	lower := bytes.ToLower(body)
+	idx := bytes.Index(lower, []byte("<body"))
+	if idx == -1 {
+		return append(bar, body...)
+	}
+	// Find the closing > of the <body ...> tag
+	closeIdx := bytes.IndexByte(body[idx:], '>')
+	if closeIdx == -1 {
+		return append(bar, body...)
+	}
+	insertAt := idx + closeIdx + 1
+	result := make([]byte, 0, len(body)+len(bar))
+	result = append(result, body[:insertAt]...)
+	result = append(result, bar...)
+	result = append(result, body[insertAt:]...)
+	return result
+}
+
+// headerBarHTML returns a self-contained HTML+CSS navigation bar for injection into ZIM pages.
+func headerBarHTML(slug, title string, a *zim.Archive) string {
+	es := html.EscapeString(slug)
+	et := html.EscapeString(title)
+
+	var b strings.Builder
+	b.WriteString(`<style>
+#gzim-bar{position:sticky;top:0;z-index:999999;background:#f6f8fa;border-bottom:1px solid #d0d7de;padding:4px 12px;font:13px/1.4 system-ui,sans-serif;display:flex;align-items:center;gap:10px;flex-wrap:wrap;box-sizing:border-box}
+#gzim-bar *{box-sizing:border-box;margin:0;padding:0}
+#gzim-bar a{color:#0366d6;text-decoration:none}
+#gzim-bar a:hover{text-decoration:underline}
+#gzim-bar .gzim-title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+#gzim-bar .gzim-sep{color:#d0d7de}
+#gzim-bar form{display:flex;gap:4px}
+#gzim-bar input[type=text]{padding:2px 6px;border:1px solid #d0d7de;border-radius:3px;font-size:13px;width:160px}
+#gzim-bar input[type=text]:focus{outline:none;border-color:#0366d6}
+#gzim-bar .gzim-btn{padding:2px 8px;border:1px solid #d0d7de;border-radius:3px;background:#fff;font-size:13px;cursor:pointer;color:#0366d6;text-decoration:none;white-space:nowrap}
+#gzim-bar .gzim-btn:hover{background:#f0f3f6;text-decoration:none}
+#gzim-bar .gzim-az{display:flex;gap:2px;flex-wrap:wrap}
+#gzim-bar .gzim-az a{padding:1px 4px;border-radius:2px;font-size:12px;font-weight:600}
+#gzim-bar .gzim-az a:hover{background:#ddf4ff;text-decoration:none}
+#gzim-bar .gzim-az span{padding:1px 4px;font-size:12px;font-weight:600;color:#ccc}
+body{padding-top:0!important}
+</style>`)
+
+	b.WriteString(`<div id="gzim-bar">`)
+	fmt.Fprintf(&b, `<a href="/" title="Library">📚</a>`)
+	b.WriteString(`<span class="gzim-sep">|</span>`)
+	fmt.Fprintf(&b, `<a class="gzim-title" href="/%s/" title="%s">%s</a>`, es, et, et)
+	fmt.Fprintf(&b, `<form action="/%s/-/search" method="get"><input type="text" name="q" placeholder="Search…"><button class="gzim-btn" type="submit">Search</button></form>`, es)
+	fmt.Fprintf(&b, `<a class="gzim-btn" href="/%s/-/random">Random</a>`, es)
+
+	b.WriteString(`<span class="gzim-sep">|</span><span class="gzim-az">`)
+	for c := byte('A'); c <= 'Z'; c++ {
+		count := a.TitlePrefixCount('C', string(c)) +
+			a.TitlePrefixCount('C', strings.ToLower(string(c)))
+		if count > 0 {
+			fmt.Fprintf(&b, `<a href="/%s/-/browse?letter=%c">%c</a>`, es, c, c)
+		} else {
+			fmt.Fprintf(&b, `<span>%c</span>`, c)
+		}
+	}
+	b.WriteString(`</span>`)
+	b.WriteString(`</div>`)
+
+	return b.String()
 }

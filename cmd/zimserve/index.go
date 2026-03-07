@@ -48,7 +48,7 @@ a:hover { text-decoration: underline; }
 .actions { margin-top: 4px; }
 .arrow { font-size: 0.75em; margin-left: 4px; }
 </style></head><body>
-<h1>Library</h1>
+<h1>📚 Library</h1>
 <div class="search-wrap">
 <div class="search-box">
 <input type="text" id="search-input" placeholder="Search articles..." autocomplete="off">
