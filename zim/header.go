@@ -6,9 +6,10 @@ import (
 )
 
 const (
-	zimMagic    = 0x44D495A
-	headerSize  = 80
-	noMainPage  = 0xFFFFFFFF
+	zimMagic       = 0x44D495A
+	headerSize     = 80
+	noMainPage     = 0xFFFFFFFF
+	noTitlePtrList = 0xFFFFFFFFFFFFFFFF
 )
 
 type header struct {

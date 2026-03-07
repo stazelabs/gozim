@@ -21,6 +21,11 @@ type Archive struct {
 	hdr       header
 	mimeTypes []string
 
+	// titleList holds title-ordered entry indices for ZIM v6.1+ files that
+	// store the title ordering in an X/listing/titleOrdered/v1 (or v0) entry
+	// instead of the header's title pointer table (TitlePtrPos == 0xFFFF...).
+	titleList []uint32
+
 	clusterMu    sync.Mutex
 	clusterCache map[uint32]*cluster
 	cacheSize    int
@@ -109,6 +114,42 @@ func (a *Archive) init() error {
 	}
 	a.mimeTypes = parseMIMEList(mimeBuf)
 
+	// ZIM v6.1+ may store title ordering in a listing entry instead of the
+	// header's title pointer table. Load it if TitlePtrPos is the sentinel.
+	if a.hdr.TitlePtrPos == noTitlePtrList {
+		if err := a.loadTitleListing(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// loadTitleListing reads the title-ordered listing from X/listing/titleOrdered/v1
+// (preferred) or v0. These entries contain a flat array of uint32 entry indices
+// in title-sorted order, used by ZIM v6.1+ files.
+func (a *Archive) loadTitleListing() error {
+	// Try v1 first (content entries only, sorted by title), then v0
+	for _, path := range []string{"X/listing/titleOrdered/v1", "X/listing/titleOrdered/v0"} {
+		e, err := a.EntryByPath(path)
+		if err != nil {
+			continue
+		}
+		data, err := e.ReadContent()
+		if err != nil {
+			return fmt.Errorf("zim: read title listing %s: %w", path, err)
+		}
+		if len(data)%4 != 0 {
+			return fmt.Errorf("zim: title listing %s has invalid size %d", path, len(data))
+		}
+		count := len(data) / 4
+		a.titleList = make([]uint32, count)
+		for i := range a.titleList {
+			a.titleList[i] = binary.LittleEndian.Uint32(data[i*4 : i*4+4])
+		}
+		return nil
+	}
+	// No listing found — title iteration won't work, but don't fail the open.
 	return nil
 }
 
@@ -219,7 +260,7 @@ func (a *Archive) EntryByPath(path string) (Entry, error) {
 // EntryByTitle looks up an entry by namespace and title using binary search
 // over the title pointer list. The list is sorted by (namespace, title).
 func (a *Archive) EntryByTitle(ns byte, title string) (Entry, error) {
-	lo, hi := uint32(0), a.hdr.EntryCount
+	lo, hi := uint32(0), a.titleCount()
 	for lo < hi {
 		mid := lo + (hi-lo)/2
 		entry, err := a.entryByTitleIndex(mid)
@@ -257,8 +298,22 @@ func compareTitleKey(ns1 byte, title1 string, ns2 byte, title2 string) int {
 	return 0
 }
 
+// titleCount returns the number of entries in the title-ordered list.
+func (a *Archive) titleCount() uint32 {
+	if a.titleList != nil {
+		return uint32(len(a.titleList))
+	}
+	return a.hdr.EntryCount
+}
+
 // entryByTitleIndex reads the entry at position idx in the title pointer list.
 func (a *Archive) entryByTitleIndex(idx uint32) (Entry, error) {
+	if a.titleList != nil {
+		if int(idx) >= len(a.titleList) {
+			return Entry{}, fmt.Errorf("zim: title index %d out of range", idx)
+		}
+		return a.EntryByIndex(a.titleList[idx])
+	}
 	ptrOffset := int64(a.hdr.TitlePtrPos) + int64(idx)*4
 	var ptrBuf [4]byte
 	if _, err := a.r.ReadAt(ptrBuf[:], ptrOffset); err != nil {
@@ -271,7 +326,7 @@ func (a *Archive) entryByTitleIndex(idx uint32) (Entry, error) {
 // EntriesByTitle returns an iterator over all entries sorted by title.
 func (a *Archive) EntriesByTitle() iter.Seq[Entry] {
 	return func(yield func(Entry) bool) {
-		for i := uint32(0); i < a.hdr.EntryCount; i++ {
+		for i := uint32(0); i < a.titleCount(); i++ {
 			e, err := a.entryByTitleIndex(i)
 			if err != nil {
 				return
@@ -342,6 +397,90 @@ func (a *Archive) namespaceBounds(ns byte) (lo, hi uint32) {
 func (a *Archive) EntryCountByNamespace(ns byte) int {
 	lo, hi := a.namespaceBounds(ns)
 	return int(hi - lo)
+}
+
+// TitlePrefixCount returns the number of entries in namespace ns whose title
+// starts with prefix. Uses dual binary search — O(log N).
+// An empty prefix counts all entries for the namespace in the title-sorted list.
+func (a *Archive) TitlePrefixCount(ns byte, prefix string) int {
+	count := a.titleCount()
+
+	// Lower bound: first index where (entry.ns, entry.title) >= (ns, prefix).
+	lo, hi := uint32(0), count
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		e, err := a.entryByTitleIndex(mid)
+		if err != nil {
+			return 0
+		}
+		if compareTitleKey(e.Namespace(), e.Title(), ns, prefix) < 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	lower := lo
+
+	// Upper bound: first index past the prefix range.
+	lo, hi = lower, count
+	if prefix == "" {
+		// Find first entry in namespace > ns.
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			e, err := a.entryByTitleIndex(mid)
+			if err != nil {
+				return int(lo - lower)
+			}
+			if e.Namespace() <= ns {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+	} else {
+		// nextPrefix is the shortest string that sorts strictly after all strings
+		// starting with prefix: increment the last byte that is < 0xFF.
+		b := []byte(prefix)
+		found := false
+		for i := len(b) - 1; i >= 0; i-- {
+			if b[i] < 0xff {
+				b[i]++
+				b = b[:i+1]
+				found = true
+				break
+			}
+		}
+		if !found {
+			// All bytes are 0xFF; find end of namespace.
+			for lo < hi {
+				mid := lo + (hi-lo)/2
+				e, err := a.entryByTitleIndex(mid)
+				if err != nil {
+					return int(lo - lower)
+				}
+				if e.Namespace() <= ns {
+					lo = mid + 1
+				} else {
+					hi = mid
+				}
+			}
+		} else {
+			nextPrefix := string(b)
+			for lo < hi {
+				mid := lo + (hi-lo)/2
+				e, err := a.entryByTitleIndex(mid)
+				if err != nil {
+					return int(lo - lower)
+				}
+				if compareTitleKey(e.Namespace(), e.Title(), ns, nextPrefix) < 0 {
+					lo = mid + 1
+				} else {
+					hi = mid
+				}
+			}
+		}
+	}
+	return int(lo - lower)
 }
 
 // RandomEntry returns a random entry from the given namespace.

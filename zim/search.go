@@ -14,9 +14,10 @@ import (
 // An empty prefix iterates all entries in the namespace in title order.
 func (a *Archive) EntriesByTitlePrefix(ns byte, prefix string) iter.Seq[Entry] {
 	return func(yield func(Entry) bool) {
+		count := a.titleCount()
 		// Binary search for lower bound: first index where
 		// compareTitleKey(entry) >= (ns, prefix).
-		lo, hi := uint32(0), a.hdr.EntryCount
+		lo, hi := uint32(0), count
 		for lo < hi {
 			mid := lo + (hi-lo)/2
 			e, err := a.entryByTitleIndex(mid)
@@ -31,7 +32,7 @@ func (a *Archive) EntriesByTitlePrefix(ns byte, prefix string) iter.Seq[Entry] {
 		}
 
 		// Iterate forward while namespace matches and title has the prefix.
-		for i := lo; i < a.hdr.EntryCount; i++ {
+		for i := lo; i < count; i++ {
 			e, err := a.entryByTitleIndex(i)
 			if err != nil {
 				return
@@ -56,7 +57,8 @@ func (a *Archive) EntriesByTitlePrefix(ns byte, prefix string) iter.Seq[Entry] {
 func (a *Archive) EntriesByTitlePrefixFold(ns byte, prefix string) iter.Seq[Entry] {
 	folded := strings.ToLower(prefix)
 	return func(yield func(Entry) bool) {
-		for i := uint32(0); i < a.hdr.EntryCount; i++ {
+		count := a.titleCount()
+		for i := uint32(0); i < count; i++ {
 			e, err := a.entryByTitleIndex(i)
 			if err != nil {
 				return
@@ -95,4 +97,42 @@ func (a *Archive) HasFulltextIndex() bool {
 func (a *Archive) HasTitleIndex() bool {
 	_, err := a.EntryByPath("X/title/xapian")
 	return err == nil
+}
+
+// FulltextIndexFormat returns the Xapian backend format name (e.g. "Glass",
+// "Honey") of the embedded full-text index, or "" if no index is present or
+// the format cannot be determined.
+func (a *Archive) FulltextIndexFormat() string {
+	return a.xapianFormat("X/fulltext/xapian")
+}
+
+// TitleIndexFormat returns the Xapian backend format name of the embedded
+// title suggestion index, or "" if no index is present.
+func (a *Archive) TitleIndexFormat() string {
+	return a.xapianFormat("X/title/xapian")
+}
+
+// xapianFormat reads the Xapian backend magic from an index entry.
+// The data starts with: version (1 byte), magic length (1 byte), magic string.
+// Known formats: "Xapian Glass" (1.4+), "Xapian Honey" (1.5+),
+// "Xapian Chert" (legacy), "Xapian Flint" (obsolete).
+func (a *Archive) xapianFormat(path string) string {
+	e, err := a.EntryByPath(path)
+	if err != nil {
+		return ""
+	}
+	data, err := e.ReadContent()
+	if err != nil || len(data) < 4 {
+		return ""
+	}
+	magicLen := int(data[1])
+	if magicLen <= 0 || 2+magicLen > len(data) {
+		return ""
+	}
+	magic := strings.TrimRight(string(data[2:2+magicLen]), "\x00\x04")
+	// Strip "Xapian " prefix to return just the backend name.
+	if after, ok := strings.CutPrefix(magic, "Xapian "); ok {
+		return after
+	}
+	return magic
 }

@@ -200,7 +200,8 @@ form button { padding: 8px 16px; font-size: 1em; border: 1px solid #ccc; border-
 		}
 	}
 
-	fmt.Fprintf(w, `<div class="nav"><a href="/%s/">Back to main page</a></div>`, html.EscapeString(slug))
+	fmt.Fprintf(w, `<div class="nav"><a href="/">Library</a> · <a href="/%s/">Back to main page</a> · <a href="/%s/-/browse">Browse</a> · <a href="/%s/-/random">Random article</a></div>`,
+		html.EscapeString(slug), html.EscapeString(slug), html.EscapeString(slug))
 	fmt.Fprint(w, `</body></html>`)
 }
 
@@ -283,38 +284,56 @@ func (lib *library) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	totalC := ze.archive.EntryCountByNamespace('C')
+
+	// Pre-compute per-letter counts (A-Z) for nav rendering — O(26 log N).
+	letterCounts := make(map[byte]int, 26)
+	for c := byte('A'); c <= 'Z'; c++ {
+		letterCounts[c] = ze.archive.TitlePrefixCount('C', string(c)) +
+			ze.archive.TitlePrefixCount('C', strings.ToLower(string(c)))
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Browse — %s</title>
 <style>
 body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
 h1 { font-size: 1.4em; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+.total { color: #666; font-size: 0.9em; margin: -6px 0 16px; }
 .letters { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 20px; }
 .letters a { display: inline-block; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; text-decoration: none; color: #0366d6; font-weight: bold; }
 .letters a:hover { background: #f6f8fa; }
 .letters a.active { background: #0366d6; color: white; border-color: #0366d6; }
+.letters span { display: inline-block; padding: 6px 10px; border: 1px solid #eee; border-radius: 4px; color: #ccc; font-weight: bold; cursor: default; }
+.letter-info { color: #666; font-size: 0.9em; margin-bottom: 12px; }
 .entries a { display: block; padding: 6px 0; border-bottom: 1px solid #eee; color: #0366d6; text-decoration: none; }
 .entries a:hover { text-decoration: underline; }
-.pager { margin-top: 16px; font-size: 0.9em; }
-.pager a { color: #0366d6; margin-right: 12px; }
-.nav { margin-top: 10px; font-size: 0.9em; }
+.pager { display: flex; align-items: center; gap: 16px; margin-top: 16px; font-size: 0.9em; color: #666; }
+.pager a { color: #0366d6; text-decoration: none; }
+.pager a:hover { text-decoration: underline; }
+.nav { margin-top: 24px; font-size: 0.9em; }
 .nav a { color: #0366d6; }
 </style></head><body>
 <h1>Browse — <a href="/%s/">%s</a></h1>
+<p class="total">%s articles total</p>
 <div class="letters">`,
 		html.EscapeString(ze.title),
-		html.EscapeString(slug), html.EscapeString(ze.title))
+		html.EscapeString(slug), html.EscapeString(ze.title),
+		commaInt(totalC))
 
 	// Letter navigation A-Z + #
 	for c := byte('A'); c <= 'Z'; c++ {
-		cls := ""
-		if letter == string(c) {
-			cls = ` class="active"`
+		l := string(c)
+		if letterCounts[c] == 0 {
+			fmt.Fprintf(w, `<span>%s</span>`, l)
+		} else if letter == l {
+			fmt.Fprintf(w, `<a href="/%s/-/browse?letter=%s" class="active">%s</a>`,
+				html.EscapeString(slug), l, l)
+		} else {
+			fmt.Fprintf(w, `<a href="/%s/-/browse?letter=%s">%s</a>`,
+				html.EscapeString(slug), l, l)
 		}
-		fmt.Fprintf(w, `<a href="/%s/-/browse?letter=%s"%s>%s</a>`,
-			html.EscapeString(slug), string(c), cls, string(c))
 	}
-	// # for non-alpha
 	cls := ""
 	if letter == "#" {
 		cls = ` class="active"`
@@ -323,41 +342,58 @@ h1 { font-size: 1.4em; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
 	fmt.Fprint(w, `</div>`)
 
 	if letter != "" {
-		fmt.Fprint(w, `<div class="entries">`)
 		var entries []searchResult
+		var letterCount int
+
 		if letter == "#" {
-			// Non-alpha: iterate all C entries, collect those starting with non-letter
+			// Non-alpha: collect all C entries starting with a non-letter rune.
 			for e := range ze.archive.EntriesByTitlePrefix('C', "") {
 				t := e.Title()
 				if t == "" {
 					continue
 				}
-				r, _ := utf8.DecodeRuneInString(t)
-				if !unicode.IsLetter(r) {
+				ru, _ := utf8.DecodeRuneInString(t)
+				if !unicode.IsLetter(ru) {
 					entries = append(entries, searchResult{
 						Path:  "/" + slug + "/" + e.Path(),
 						Title: t,
 					})
-					if len(entries) >= offset+limit+1 {
-						break
-					}
 				}
 			}
+			letterCount = len(entries)
 		} else {
-			for e := range ze.archive.EntriesByTitlePrefix('C', letter) {
+			// Collect entries for both cases (e.g., "A" and "a") and merge.
+			upper := strings.ToUpper(letter)
+			lower := strings.ToLower(letter)
+			letterCount = ze.archive.TitlePrefixCount('C', upper)
+			if lower != upper {
+				letterCount += ze.archive.TitlePrefixCount('C', lower)
+			}
+			for e := range ze.archive.EntriesByTitlePrefix('C', upper) {
 				entries = append(entries, searchResult{
 					Path:  "/" + slug + "/" + e.Path(),
 					Title: e.Title(),
 				})
-				if len(entries) >= offset+limit+1 {
+				if len(entries) >= offset+limit {
 					break
+				}
+			}
+			if lower != upper && len(entries) < offset+limit {
+				for e := range ze.archive.EntriesByTitlePrefix('C', lower) {
+					entries = append(entries, searchResult{
+						Path:  "/" + slug + "/" + e.Path(),
+						Title: e.Title(),
+					})
+					if len(entries) >= offset+limit {
+						break
+					}
 				}
 			}
 		}
 
-		// Apply offset/limit
-		hasMore := len(entries) > offset+limit
-		if offset >= len(entries) {
+		fmt.Fprintf(w, `<p class="letter-info">%s articles</p>`, commaInt(letterCount))
+		fmt.Fprint(w, `<div class="entries">`)
+		if letterCount == 0 || offset >= letterCount {
 			fmt.Fprint(w, `<p style="color:#666;font-style:italic">No entries.</p>`)
 		} else {
 			end := offset + limit
@@ -370,26 +406,46 @@ h1 { font-size: 1.4em; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
 		}
 		fmt.Fprint(w, `</div>`)
 
-		// Pager
-		fmt.Fprint(w, `<div class="pager">`)
-		if offset > 0 {
-			prev := offset - limit
-			if prev < 0 {
-				prev = 0
+		if letterCount > 0 {
+			pageEnd := offset + limit
+			if pageEnd > letterCount {
+				pageEnd = letterCount
 			}
-			fmt.Fprintf(w, `<a href="/%s/-/browse?letter=%s&offset=%d&limit=%d">Previous</a>`,
-				html.EscapeString(slug), html.EscapeString(letter), prev, limit)
+			fmt.Fprint(w, `<div class="pager">`)
+			if offset > 0 {
+				prev := offset - limit
+				if prev < 0 {
+					prev = 0
+				}
+				fmt.Fprintf(w, `<a href="/%s/-/browse?letter=%s&offset=%d&limit=%d">← Previous</a>`,
+					html.EscapeString(slug), html.EscapeString(letter), prev, limit)
+			}
+			fmt.Fprintf(w, `<span>%s–%s of %s</span>`,
+				commaInt(offset+1), commaInt(pageEnd), commaInt(letterCount))
+			if offset+limit < letterCount {
+				fmt.Fprintf(w, `<a href="/%s/-/browse?letter=%s&offset=%d&limit=%d">Next →</a>`,
+					html.EscapeString(slug), html.EscapeString(letter), offset+limit, limit)
+			}
+			fmt.Fprint(w, `</div>`)
 		}
-		if hasMore {
-			fmt.Fprintf(w, `<a href="/%s/-/browse?letter=%s&offset=%d&limit=%d">Next</a>`,
-				html.EscapeString(slug), html.EscapeString(letter), offset+limit, limit)
-		}
-		fmt.Fprint(w, `</div>`)
 	}
 
-	fmt.Fprintf(w, `<div class="nav"><a href="/%s/">Back to main page</a> · <a href="/%s/-/search">Search</a> · <a href="/%s/-/random">Random article</a></div>`,
+	fmt.Fprintf(w, `<div class="nav"><a href="/">Library</a> · <a href="/%s/">Back to main page</a> · <a href="/%s/-/search">Search</a> · <a href="/%s/-/random">Random article</a></div>`,
 		html.EscapeString(slug), html.EscapeString(slug), html.EscapeString(slug))
 	fmt.Fprint(w, `</body></html>`)
+}
+
+// commaInt formats n with comma thousands separators.
+func commaInt(n int) string {
+	s := strconv.Itoa(n)
+	out := make([]byte, 0, len(s)+len(s)/3)
+	for i := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, s[i])
+	}
+	return string(out)
 }
 
 func (lib *library) handleContent(w http.ResponseWriter, r *http.Request) {

@@ -45,6 +45,7 @@ th.num { text-align: right; }
 a { text-decoration: none; color: #0366d6; }
 a:hover { text-decoration: underline; }
 .sub { color: #666; font-size: 0.82em; margin-top: 2px; }
+.actions { margin-top: 4px; }
 .arrow { font-size: 0.75em; margin-left: 4px; }
 </style></head><body>
 <h1>Library</h1>
@@ -78,11 +79,14 @@ a:hover { text-decoration: underline; }
 	for _, slug := range lib.slugs {
 		e := lib.archives[slug]
 
-		// Title cell: link + optional description subtitle
+		// Title cell: link + optional description subtitle + action links
 		titleCell := fmt.Sprintf(`<a href="/%s/">%s</a>`, html.EscapeString(slug), html.EscapeString(e.title))
 		if e.description != "" {
 			titleCell += fmt.Sprintf(`<div class="sub">%s</div>`, html.EscapeString(e.description))
 		}
+		titleCell += fmt.Sprintf(
+			`<div class="sub actions"><a href="/%s/-/browse">Browse</a> · <a href="/%s/-/search">Search</a> · <a href="/%s/-/random">Random</a></div>`,
+			html.EscapeString(slug), html.EscapeString(slug), html.EscapeString(slug))
 
 		// File cell: filename + language + optional creator/flavour subtitle
 		fileCell := html.EscapeString(e.filename)

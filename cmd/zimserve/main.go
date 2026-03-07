@@ -235,6 +235,9 @@ func loadLibrary(paths []string, hardFailCount int, cacheSize int) (*library, er
 	if len(lib.slugs) == 0 {
 		return nil, errors.New("no valid ZIM files found")
 	}
+	sort.Slice(lib.slugs, func(i, j int) bool {
+		return strings.ToLower(lib.archives[lib.slugs[i]].title) < strings.ToLower(lib.archives[lib.slugs[j]].title)
+	})
 	return lib, nil
 }
 
