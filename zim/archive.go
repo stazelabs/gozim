@@ -1,13 +1,19 @@
 package zim
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"iter"
+	"math/big"
 	"sync"
 )
 
 const defaultCacheSize = 16
+
+// maxClusterSize is the upper bound on cluster data we'll allocate (4 GiB).
+// Any cluster claiming to be larger than this in a ZIM file is treated as corrupt.
+const maxClusterSize = 4 << 30 // 4 GiB
 
 // Archive represents an opened ZIM file.
 type Archive struct {
@@ -123,6 +129,12 @@ func (a *Archive) EntryCount() uint32 { return a.hdr.EntryCount }
 
 // ClusterCount returns the total number of clusters.
 func (a *Archive) ClusterCount() uint32 { return a.hdr.ClusterCount }
+
+// MajorVersion returns the ZIM format major version.
+func (a *Archive) MajorVersion() uint16 { return a.hdr.MajorVersion }
+
+// MinorVersion returns the ZIM format minor version.
+func (a *Archive) MinorVersion() uint16 { return a.hdr.MinorVersion }
 
 // MIMETypes returns the list of MIME types in the archive.
 func (a *Archive) MIMETypes() []string {
@@ -285,13 +297,93 @@ func (a *Archive) Metadata(key string) (string, error) {
 	return string(data), nil
 }
 
+// namespaceBounds returns the [lo, hi) index range in the URL pointer list
+// for entries in the given namespace. Uses binary search — O(log N).
+func (a *Archive) namespaceBounds(ns byte) (lo, hi uint32) {
+	prefix := string(ns) + "/"
+	// Find lower bound: first entry where FullPath() >= prefix
+	left, right := uint32(0), a.hdr.EntryCount
+	for left < right {
+		mid := left + (right-left)/2
+		e, err := a.EntryByIndex(mid)
+		if err != nil {
+			return 0, 0
+		}
+		if e.FullPath() < prefix {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	lo = left
+
+	// Find upper bound: first entry where namespace > ns.
+	// Namespace is a single byte, so ns+1 prefix works (unless ns == 0xFF).
+	nextPrefix := string(ns+1) + "/"
+	left, right = lo, a.hdr.EntryCount
+	for left < right {
+		mid := left + (right-left)/2
+		e, err := a.EntryByIndex(mid)
+		if err != nil {
+			return lo, lo
+		}
+		if e.FullPath() < nextPrefix {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	hi = left
+	return lo, hi
+}
+
+// EntryCountByNamespace returns the number of entries in the given namespace.
+// Uses binary search to find the namespace bounds — O(log N).
+func (a *Archive) EntryCountByNamespace(ns byte) int {
+	lo, hi := a.namespaceBounds(ns)
+	return int(hi - lo)
+}
+
+// RandomEntry returns a random entry from the given namespace.
+// Uses crypto/rand for unbiased selection.
+func (a *Archive) RandomEntry(ns byte) (Entry, error) {
+	lo, hi := a.namespaceBounds(ns)
+	count := hi - lo
+	if count == 0 {
+		return Entry{}, ErrNotFound
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(count)))
+	if err != nil {
+		return Entry{}, fmt.Errorf("zim: random: %w", err)
+	}
+	return a.EntryByIndex(lo + uint32(n.Int64()))
+}
+
+// Illustration returns the illustration (icon/favicon) of the given pixel size.
+// It reads the metadata entry at M/Illustration_{size}x{size}@1.
+func (a *Archive) Illustration(size int) ([]byte, error) {
+	path := fmt.Sprintf("M/Illustration_%dx%d@1", size, size)
+	entry, err := a.EntryByPath(path)
+	if err != nil {
+		return nil, err
+	}
+	return entry.ReadContent()
+}
+
 // readCluster reads, decompresses, and caches a cluster by number.
 func (a *Archive) readCluster(clusterNum uint32) (*cluster, error) {
 	a.clusterMu.Lock()
 	defer a.clusterMu.Unlock()
 
-	// Check cache
+	// Check cache and promote to back (most-recently-used)
 	if c, ok := a.clusterCache[clusterNum]; ok {
+		for i, v := range a.cacheOrder {
+			if v == clusterNum {
+				a.cacheOrder = append(a.cacheOrder[:i], a.cacheOrder[i+1:]...)
+				a.cacheOrder = append(a.cacheOrder, clusterNum)
+				break
+			}
+		}
 		return c, nil
 	}
 
@@ -320,6 +412,9 @@ func (a *Archive) readCluster(clusterNum uint32) (*cluster, error) {
 	if clusterSize <= 0 {
 		return nil, fmt.Errorf("zim: invalid cluster size %d", clusterSize)
 	}
+	if clusterSize > maxClusterSize {
+		return nil, fmt.Errorf("zim: cluster %d size %d exceeds maximum (%d)", clusterNum, clusterSize, maxClusterSize)
+	}
 
 	// Read cluster data
 	clusterData := make([]byte, clusterSize)
@@ -333,7 +428,7 @@ func (a *Archive) readCluster(clusterNum uint32) (*cluster, error) {
 		return nil, fmt.Errorf("zim: parse cluster %d: %w", clusterNum, err)
 	}
 
-	// Cache with simple LRU eviction
+	// Cache with LRU eviction
 	if a.clusterCache != nil {
 		if len(a.cacheOrder) >= a.cacheSize {
 			evict := a.cacheOrder[0]

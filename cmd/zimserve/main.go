@@ -1,16 +1,20 @@
 package main
 
 import (
+	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"html"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -70,6 +74,7 @@ type zimEntry struct {
 	date        string
 	creator     string
 	flavour     string
+	uuidHex     string // hex-encoded UUID for ETag generation
 }
 
 func serve(paths []string, dirs []string, recursive bool, addr string, cacheSize int) error {
@@ -92,6 +97,16 @@ func serve(paths []string, dirs []string, recursive bool, addr string, cacheSize
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", lib.handleRoot)
+	mux.HandleFunc("/_random", lib.handleRandomAll)
+	mux.HandleFunc("/_search", lib.handleSearchAll)
+	mux.HandleFunc("/{slug}/_search", lib.handleSearchJSON)
+	mux.HandleFunc("/{slug}/-/search", lib.handleSearchPage)
+	mux.HandleFunc("/{slug}/-/random", lib.handleRandom)
+	mux.HandleFunc("/{slug}/-/browse", lib.handleBrowse)
+	mux.HandleFunc("/{slug}/-/info", lib.handleInfo)
+	mux.HandleFunc("/{slug}/-/info/ns", lib.handleInfoNamespace)
+	mux.HandleFunc("/{slug}/-/info/mime", lib.handleInfoMIME)
+	mux.HandleFunc("/{slug}/-/info/entry", lib.handleInfoEntry)
 	mux.HandleFunc("/{slug}/{path...}", lib.handleContent)
 
 	srv := &http.Server{
@@ -102,8 +117,23 @@ func serve(paths []string, dirs []string, recursive bool, addr string, cacheSize
 		IdleTimeout:  120 * time.Second,
 	}
 
+	// Graceful shutdown on SIGINT/SIGTERM
+	done := make(chan error, 1)
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		sig := <-sigCh
+		log.Printf("received %v, shutting down...", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		done <- srv.Shutdown(ctx)
+	}()
+
 	log.Printf("listening on %s", addr)
-	return srv.ListenAndServe()
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return <-done
 }
 
 // collectZIMPaths scans dirs for .zim files. Non-recursive by default;
@@ -186,6 +216,7 @@ func loadLibrary(paths []string, hardFailCount int, cacheSize int) (*library, er
 		creator, _ := a.Metadata("Creator")
 		flavour, _ := a.Metadata("Flavour")
 
+		uuid := a.UUID()
 		lib.archives[slug] = &zimEntry{
 			archive:     a,
 			slug:        slug,
@@ -196,6 +227,7 @@ func loadLibrary(paths []string, hardFailCount int, cacheSize int) (*library, er
 			date:        date,
 			creator:     creator,
 			flavour:     flavour,
+			uuidHex:     hex.EncodeToString(uuid[:]),
 		}
 		lib.slugs = append(lib.slugs, slug)
 	}
@@ -224,6 +256,14 @@ func makeSlug(path string) string {
 	return strings.Join(parts, "_")
 }
 
+// makeETag generates an ETag for a content entry from the archive UUID and path.
+func makeETag(ze *zimEntry, entryPath string) string {
+	h := md5.New()
+	h.Write([]byte(ze.uuidHex))
+	h.Write([]byte(entryPath))
+	return `"` + hex.EncodeToString(h.Sum(nil)) + `"`
+}
+
 // securityHeaders adds OWASP-recommended response headers to every response.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -245,184 +285,4 @@ func methodCheck(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func (lib *library) handleRoot(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-
-	// Single ZIM: redirect to its main page
-	if len(lib.slugs) == 1 {
-		slug := lib.slugs[0]
-		http.Redirect(w, r, "/"+slug+"/", http.StatusFound)
-		return
-	}
-
-	// Multiple ZIMs: show library index
-	h := w.Header()
-	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
-	fmt.Fprint(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>zimserve</title>
-<style>
-body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }
-h1 { border-bottom: 1px solid #ddd; padding-bottom: 10px; }
-table { width: 100%; border-collapse: collapse; }
-th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #ddd; cursor: pointer; user-select: none; white-space: nowrap; }
-th:hover { background: #f6f8fa; }
-th.sorted { color: #0366d6; }
-td { padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: top; }
-td.num { text-align: right; white-space: nowrap; }
-th.num { text-align: right; }
-a { text-decoration: none; color: #0366d6; }
-a:hover { text-decoration: underline; }
-.sub { color: #666; font-size: 0.82em; margin-top: 2px; }
-.arrow { font-size: 0.75em; margin-left: 4px; }
-</style></head><body>
-<h1>Library</h1>
-<table><thead><tr>
-<th data-col="0">Title<span class="arrow"></span></th>
-<th data-col="1">File<span class="arrow"></span></th>
-<th data-col="2">Date<span class="arrow"></span></th>
-<th data-col="3" class="num">Entries<span class="arrow"></span></th>
-</tr></thead><tbody>`)
-	for _, slug := range lib.slugs {
-		e := lib.archives[slug]
-
-		// Title cell: link + optional description subtitle
-		titleCell := fmt.Sprintf(`<a href="/%s/">%s</a>`, html.EscapeString(slug), html.EscapeString(e.title))
-		if e.description != "" {
-			titleCell += fmt.Sprintf(`<div class="sub">%s</div>`, html.EscapeString(e.description))
-		}
-
-		// File cell: filename + language + optional creator/flavour subtitle
-		fileCell := html.EscapeString(e.filename)
-		if e.language != "" {
-			fileCell += fmt.Sprintf(` <span class="sub" style="display:inline">[%s]</span>`, html.EscapeString(e.language))
-		}
-		var metaParts []string
-		if e.creator != "" {
-			metaParts = append(metaParts, html.EscapeString(e.creator))
-		}
-		if e.flavour != "" {
-			metaParts = append(metaParts, html.EscapeString(e.flavour))
-		}
-		if len(metaParts) > 0 {
-			fileCell += fmt.Sprintf(`<div class="sub">%s</div>`, strings.Join(metaParts, " · "))
-		}
-
-		// Date cell
-		dateVal := e.date
-		dateDisplay := e.date
-		if dateDisplay == "" {
-			dateVal = ""
-			dateDisplay = "—"
-		}
-
-		fmt.Fprintf(w, "<tr><td data-val=%q>%s</td><td data-val=%q>%s</td><td data-val=%q>%s</td><td data-val=%q class=\"num\">%d</td></tr>",
-			e.title, titleCell,
-			e.filename, fileCell,
-			dateVal, html.EscapeString(dateDisplay),
-			fmt.Sprintf("%d", e.archive.EntryCount()), e.archive.EntryCount())
-	}
-	fmt.Fprint(w, `</tbody></table>
-<script>
-(function(){
-  var col = 0, asc = true;
-  var ths = document.querySelectorAll('th[data-col]');
-  var tbody = document.querySelector('tbody');
-  function sort(c, a) {
-    col = c; asc = a;
-    ths.forEach(function(th, i) {
-      var arrow = th.querySelector('.arrow');
-      arrow.textContent = i === c ? (a ? ' \u25b2' : ' \u25bc') : '';
-      th.classList.toggle('sorted', i === c);
-    });
-    var rows = Array.from(tbody.rows);
-    rows.sort(function(ra, rb) {
-      var av = ra.cells[c].dataset.val;
-      var bv = rb.cells[c].dataset.val;
-      var cmp = c === 3 ? +av - +bv : av.toLowerCase().localeCompare(bv.toLowerCase());
-      return a ? cmp : -cmp;
-    });
-    rows.forEach(function(r){ tbody.appendChild(r); });
-  }
-  ths.forEach(function(th, i){
-    th.addEventListener('click', function(){ sort(i, col === i ? !asc : true); });
-  });
-  sort(0, true);
-})();
-</script>
-</body></html>`)
-}
-
-func (lib *library) handleContent(w http.ResponseWriter, r *http.Request) {
-	slug := r.PathValue("slug")
-	contentPath := r.PathValue("path")
-
-	ze, ok := lib.archives[slug]
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-
-	// Root of a ZIM: serve main page or redirect to it
-	if contentPath == "" {
-		if !ze.archive.HasMainEntry() {
-			http.Error(w, "no main page", http.StatusNotFound)
-			return
-		}
-		main, err := ze.archive.MainEntry()
-		if err != nil {
-			log.Printf("error reading main entry for %s: %v", slug, err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		resolved, err := main.Resolve()
-		if err != nil {
-			log.Printf("error resolving main entry for %s: %v", slug, err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		http.Redirect(w, r, "/"+slug+"/"+resolved.Path(), http.StatusFound)
-		return
-	}
-
-	// Look up entry in C namespace
-	entry, err := ze.archive.EntryByPath("C/" + contentPath)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	// Handle redirects within the ZIM
-	if entry.IsRedirect() {
-		resolved, err := entry.Resolve()
-		if err != nil {
-			log.Printf("error resolving redirect for %s/%s: %v", slug, contentPath, err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		http.Redirect(w, r, "/"+slug+"/"+resolved.Path(), http.StatusFound)
-		return
-	}
-
-	// Read content
-	data, err := entry.ReadContent()
-	if err != nil {
-		log.Printf("error reading content for %s/%s: %v", slug, contentPath, err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Set Content-Type from MIME type
-	mime := entry.MIMEType()
-	if mime != "" {
-		w.Header().Set("Content-Type", mime)
-	}
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
-
-	w.Write(data)
 }

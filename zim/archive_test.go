@@ -2,6 +2,7 @@ package zim
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -148,6 +149,168 @@ func TestReadContent(t *testing.T) {
 			}
 			t.Logf("  Preview: %s", preview)
 		}
+	}
+}
+
+func TestContentSize(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	for i := uint32(0); i < a.EntryCount(); i++ {
+		e, err := a.EntryByIndex(i)
+		if err != nil {
+			t.Fatalf("EntryByIndex(%d): %v", i, err)
+		}
+		if e.IsRedirect() {
+			continue
+		}
+		data, err := e.ReadContent()
+		if err != nil {
+			t.Fatalf("ReadContent for %s: %v", e.FullPath(), err)
+		}
+		size, err := e.ContentSize()
+		if err != nil {
+			t.Fatalf("ContentSize for %s: %v", e.FullPath(), err)
+		}
+		if size != int64(len(data)) {
+			t.Errorf("ContentSize for %s: got %d, want %d", e.FullPath(), size, len(data))
+		}
+	}
+}
+
+func TestContentReader(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	for i := uint32(0); i < a.EntryCount(); i++ {
+		e, err := a.EntryByIndex(i)
+		if err != nil {
+			t.Fatalf("EntryByIndex(%d): %v", i, err)
+		}
+		if e.IsRedirect() {
+			continue
+		}
+		want, err := e.ReadContent()
+		if err != nil {
+			t.Fatalf("ReadContent for %s: %v", e.FullPath(), err)
+		}
+		reader, err := e.ContentReader()
+		if err != nil {
+			t.Fatalf("ContentReader for %s: %v", e.FullPath(), err)
+		}
+		got, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatalf("ReadAll for %s: %v", e.FullPath(), err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("ContentReader for %s: content mismatch (got %d bytes, want %d)", e.FullPath(), len(got), len(want))
+		}
+	}
+}
+
+func TestEntryCountByNamespace(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	// Count entries manually per namespace
+	counts := make(map[byte]int)
+	for i := uint32(0); i < a.EntryCount(); i++ {
+		e, err := a.EntryByIndex(i)
+		if err != nil {
+			t.Fatalf("EntryByIndex(%d): %v", i, err)
+		}
+		counts[e.Namespace()]++
+	}
+
+	// Verify EntryCountByNamespace matches
+	for ns, want := range counts {
+		got := a.EntryCountByNamespace(ns)
+		if got != want {
+			t.Errorf("EntryCountByNamespace(%c): got %d, want %d", ns, got, want)
+		}
+	}
+
+	// Non-existent namespace should return 0
+	if got := a.EntryCountByNamespace('Z'); got != 0 {
+		t.Errorf("EntryCountByNamespace('Z'): got %d, want 0", got)
+	}
+
+	t.Logf("Namespace counts: %v", counts)
+}
+
+func TestRandomEntry(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	// Find a namespace that has entries
+	var ns byte
+	for _, candidate := range []byte{'C', 'M', 'W'} {
+		if a.EntryCountByNamespace(candidate) > 0 {
+			ns = candidate
+			break
+		}
+	}
+	if ns == 0 {
+		t.Skip("no populated namespace found")
+	}
+
+	// Get a random entry and verify it's in the right namespace
+	for i := 0; i < 10; i++ {
+		e, err := a.RandomEntry(ns)
+		if err != nil {
+			t.Fatalf("RandomEntry(%c): %v", ns, err)
+		}
+		if e.Namespace() != ns {
+			t.Errorf("RandomEntry(%c) returned namespace %c", ns, e.Namespace())
+		}
+	}
+
+	// Non-existent namespace should return ErrNotFound
+	_, err = a.RandomEntry('Z')
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("RandomEntry('Z'): expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestIllustration(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	// small.zim may not have illustrations — just verify it doesn't panic
+	// and returns ErrNotFound for missing sizes
+	_, err = a.Illustration(48)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		t.Errorf("Illustration(48): unexpected error: %v", err)
 	}
 }
 

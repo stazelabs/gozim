@@ -10,7 +10,8 @@ type Blob struct {
 	data []byte
 }
 
-// Bytes returns the raw byte content.
+// Bytes returns the raw byte content. The returned slice aliases the
+// decompressed cluster cache — callers must not modify it.
 func (b Blob) Bytes() []byte { return b.data }
 
 // String returns the content as a string.

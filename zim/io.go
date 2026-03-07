@@ -51,7 +51,7 @@ func (r *preadReader) Close() error {
 type mmapReader struct {
 	data []byte
 	size int64
-	mu   sync.Mutex
+	mu   sync.RWMutex
 }
 
 func newMmapReader(path string) (*mmapReader, error) {
@@ -81,10 +81,16 @@ func newMmapReader(path string) (*mmapReader, error) {
 }
 
 func (r *mmapReader) ReadAt(p []byte, off int64) (int, error) {
+	r.mu.RLock()
+	data := r.data
+	r.mu.RUnlock()
+	if data == nil {
+		return 0, fmt.Errorf("zim: read from closed mmap reader")
+	}
 	if off < 0 || off >= r.size {
 		return 0, io.EOF
 	}
-	n := copy(p, r.data[off:])
+	n := copy(p, data[off:])
 	if n < len(p) {
 		return n, io.EOF
 	}
@@ -97,14 +103,14 @@ func (r *mmapReader) Size() int64 {
 
 func (r *mmapReader) Close() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.data == nil {
+	data := r.data
+	r.data = nil
+	r.mu.Unlock()
+	if data == nil {
 		return nil
 	}
-	err := syscall.Munmap(r.data)
-	r.data = nil
 	runtime.SetFinalizer(r, nil)
-	return err
+	return syscall.Munmap(data)
 }
 
 // openReader opens a file using mmap on 64-bit systems, pread otherwise.

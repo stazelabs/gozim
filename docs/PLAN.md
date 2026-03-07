@@ -21,7 +21,9 @@ github.com/stazelabs/gozim/
 ├── go.sum
 ├── LICENSE
 ├── README.md
-├── PLAN.md
+├── docs/
+│   ├── PLAN.md                # This file
+│   └── ZIM-ISSUES.md          # Compatibility notes for Kiwix ecosystem
 ├── zim/                       # Core library package
 │   ├── archive.go             # Archive: Open, Close, header parsing, entry lookup
 │   ├── entry.go               # Entry type (content + redirect), directory parsing
@@ -33,13 +35,17 @@ github.com/stazelabs/gozim/
 │   ├── mime.go                # MIME type list parsing
 │   ├── io.go                  # File I/O abstraction (mmap + pread backends)
 │   ├── iter.go                # Iterator types for entries (by path, by title)
+│   ├── search.go              # Title prefix search (binary search + fold)
 │   ├── errors.go              # Sentinel errors
 │   ├── checksum.go            # MD5 integrity verification
+│   ├── doc.go                 # Package documentation
 │   └── *_test.go              # Tests for each file
 ├── cmd/
 │   ├── ziminfo/main.go        # Dump ZIM metadata
 │   ├── zimcat/main.go         # Extract entry content by path
-│   └── zimserve/main.go       # HTTP server (Phase 4)
+│   ├── zimsearch/main.go      # Title prefix search CLI
+│   ├── zimverify/main.go      # MD5 checksum verification
+│   └── zimserve/main.go       # HTTP server for browsing ZIM content
 └── testdata/                  # Small ZIM test files
 ```
 
@@ -67,7 +73,7 @@ func (a *Archive) MIMETypes() []string
 // Entry access (binary search over pointer lists)
 func (a *Archive) EntryByPath(path string) (Entry, error)
 func (a *Archive) EntryByIndex(idx uint32) (Entry, error)
-func (a *Archive) EntryByTitle(title string) (Entry, error)
+func (a *Archive) EntryByTitle(ns byte, title string) (Entry, error)
 
 // Iteration (Go 1.22+ iter.Seq)
 func (a *Archive) Entries() iter.Seq[Entry]
@@ -96,7 +102,7 @@ func (e Entry) Resolve() (Entry, error)  // follows full redirect chain
 
 ```go
 func (i Item) Data() (Blob, error)
-func (i Item) Size() (uint64, error)
+func (i Item) Size() (int64, error)
 func (i Item) MIMEType() string
 
 func (b Blob) Bytes() []byte
@@ -117,10 +123,10 @@ func WithMmap(enabled bool) Option  // mmap toggle (default: true on 64-bit)
 
 Internal `reader` interface decouples I/O from parsing:
 
-- **mmapReader** (default on 64-bit): Maps entire file, leverages OS page cache, zero-copy reads. Use `github.com/edsrzf/mmap-go` for cross-platform support.
+- **mmapReader** (default on 64-bit): Maps entire file via `syscall.Mmap`, leverages OS page cache, zero-copy reads.
 - **preadReader** (fallback): Uses `*os.File.ReadAt`. Default on 32-bit or when mmap disabled.
 
-**Lazy loading:** Header + MIME list parsed eagerly on `Open()`. Pointer lists, directory entries, and clusters read on demand. Decompressed clusters cached in LRU (`github.com/hashicorp/golang-lru/v2`).
+**Lazy loading:** Header + MIME list parsed eagerly on `Open()`. Pointer lists, directory entries, and clusters read on demand. Decompressed clusters cached in an LRU map protected by `sync.Mutex`.
 
 ---
 
@@ -173,8 +179,7 @@ var (
 ```
 github.com/klauspost/compress   # zstd decompression
 github.com/ulikunitz/xz         # LZMA/XZ decompression
-github.com/hashicorp/golang-lru/v2  # cluster cache
-github.com/edsrzf/mmap-go       # cross-platform mmap
+github.com/spf13/cobra          # CLI framework (cmd/ tools only)
 ```
 
 ---
@@ -216,7 +221,7 @@ github.com/edsrzf/mmap-go       # cross-platform mmap
 
 ## Phased Implementation
 
-### Phase 1: Core Reading
+### Phase 1: Core Reading ✓ Done
 **Goal:** Open a ZIM file, parse header, look up entries, read content.
 
 1. `go.mod` init
@@ -230,7 +235,7 @@ github.com/edsrzf/mmap-go       # cross-platform mmap
 9. `blob.go` + `item.go` — Blob and Item types
 10. `archive.go` + tests — `Open`, `Close`, `EntryByIndex`, `EntryByPath` (binary search), `MainEntry`
 
-### Phase 2: Complete API + CLI Tools
+### Phase 2: Complete API + CLI Tools ✓ Done
 **Goal:** Full read API, iteration, CLI tools.
 
 1. `iter.go` + tests — `Entries()`, `EntriesByTitle()` via `iter.Seq`
@@ -244,11 +249,11 @@ github.com/edsrzf/mmap-go       # cross-platform mmap
 9. Integration tests with real ZIM files
 10. Benchmarks
 
-### Phase 3: Polish & Release
-1. Fuzz tests
-2. Performance profiling & optimization
+### Phase 3: Polish & Release (partially done)
+1. ✓ Fuzz tests
+2. ✓ Performance profiling & optimization
 3. Cross-platform testing (Linux, macOS, Windows)
-4. Documentation: README with examples, GoDoc comments
+4. ✓ Documentation: README with examples, GoDoc comments
 5. CI/CD (GitHub Actions: multi-OS, race detector, fuzz)
 6. Tag v0.1.0
 
@@ -258,7 +263,7 @@ github.com/edsrzf/mmap-go       # cross-platform mmap
 3. Static file serving for ZIM resources
 4. Multi-ZIM library support
 
-### Phase 5: Search
+### Phase 5: Search ✓ Done
 **Goal:** Title prefix search using the sorted title pointer list; `zimsearch` CLI tool.
 
 **Why not Xapian full-text search:** ZIM files embed Xapian databases (`X/fulltext/xapian`, `X/title/xapian`) in the X namespace. Parsing Xapian's on-disk format in pure Go would mean reimplementing a complex C++ database engine. Incompatible with the pure-Go/no-CGo constraint.
@@ -278,6 +283,70 @@ github.com/edsrzf/mmap-go       # cross-platform mmap
    zimsearch <file.zim> <query> [-n namespace] [-l limit] [-i]
    ```
    Outputs matching `FullPath\tTitle` lines, one per result.
+
+### Phase 6: Streaming & Content Size ✓ Done
+**Goal:** Support efficient serving of large content without full buffering.
+
+1. `Entry.ContentSize() (int64, error)` — return blob size from offset table without decompressing
+2. `Entry.ContentReader() (io.Reader, error)` — streaming content access, resolves redirects
+3. `Item.Reader() (io.Reader, error)` — streaming blob access
+4. Update zimserve to use streaming responses with correct `Content-Length`
+
+**Rationale:** `ReadContent()` loads the entire blob into memory. ZIM files can contain video, PDF, and other large media — a single blob can be hundreds of MB. Streaming avoids OOM and reduces latency to first byte.
+
+**Implementation notes:**
+- Cluster decompression is all-or-nothing (XZ/Zstd require full decompression), so the "stream" reads from the already-decompressed cached cluster
+- `ContentSize()` can be computed from the blob offset table (`offsets[i+1] - offsets[i]`) without copying data
+- The cluster cache already holds decompressed data, so `ContentReader()` wraps `bytes.NewReader` over the blob slice
+
+### Phase 7: Convenience API ✓ Done
+**Goal:** Fill common API gaps.
+
+1. `Archive.RandomEntry(ns byte) (Entry, error)` — random entry within a namespace (for "random article" feature)
+2. `Archive.Illustration(size int) ([]byte, error)` — read `M/Illustration_{size}x{size}@1` (favicon/icon)
+3. `Archive.EntryCountByNamespace(ns byte) int` — count entries in a namespace without full iteration (uses binary search to find namespace bounds)
+
+### Phase 8: zimserve Enhancements ✓ Done
+**Goal:** Bring zimserve closer to kiwix-serve feature parity.
+
+1. **Title search endpoint** — `GET /{slug}/-/search?q=term&limit=25`
+   - Uses `EntriesByTitlePrefix` / `EntriesByTitlePrefixFold`
+   - Returns HTML results page with links to matching entries
+   - JSON API variant: `GET /{slug}/-/search?q=term&format=json`
+
+2. **Browse-by-letter** — `GET /{slug}/-/browse?letter=A`
+   - Uses title iteration to list entries starting with a given letter
+   - Paginated HTML listing
+
+3. **Favicon route** — `GET /{slug}/favicon.ico`
+   - Serves the ZIM's `M/Illustration_48x48@1` entry
+   - Falls back to a default icon
+
+4. **Cache headers** — ZIM content is immutable
+   - `Cache-Control: public, max-age=31536000, immutable` on content responses
+   - `ETag` derived from archive UUID + entry path
+
+5. **Graceful shutdown** — signal handling (SIGINT/SIGTERM)
+   - Close all archives cleanly on shutdown
+   - Drain in-flight requests with configurable timeout
+
+6. **Random article** — `GET /{slug}/-/random`
+   - Uses `Archive.RandomEntry('C')`, redirects to the result
+
+### Phase 9: Multi-Part ZIM Support
+**Goal:** Support split ZIM archives (`.zimaa`, `.zimab`, …).
+
+Large ZIM files (e.g., full English Wikipedia, 90+ GB) are commonly distributed as split archives due to filesystem and hosting limitations.
+
+1. Detect `.zimaa` extension and discover all parts (`.zimab`, `.zimac`, …)
+2. Implement a `multiReader` that presents split files as a single contiguous `reader`
+3. All existing API works transparently — split vs single is an I/O detail
+4. Update CLI tools to accept `.zimaa` and auto-discover parts
+
+**Implementation notes:**
+- Each part is a fixed-size chunk (typically 2 GB) except the last
+- The `multiReader` maps `(offset, length)` → `(partIndex, partOffset)` and delegates to per-part pread/mmap readers
+- Parts can be memory-mapped individually on 64-bit systems
 
 ---
 

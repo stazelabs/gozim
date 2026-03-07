@@ -74,15 +74,12 @@ func (a *Archive) EntriesByTitlePrefixFold(ns byte, prefix string) iter.Seq[Entr
 }
 
 // hasPrefixFold reports whether s starts with prefix under Unicode case folding.
+// prefix must already be lowered.
 func hasPrefixFold(s, prefix string) bool {
 	if len(prefix) == 0 {
 		return true
 	}
-	if len(s) < len(prefix) {
-		return false
-	}
-	return strings.EqualFold(s[:len(prefix)], prefix) ||
-		strings.HasPrefix(strings.Map(unicode.ToLower, s), prefix)
+	return strings.HasPrefix(strings.Map(unicode.ToLower, s), prefix)
 }
 
 // HasFulltextIndex reports whether the archive contains an embedded full-text

@@ -5,7 +5,7 @@
 `gozim` is a native Go library for reading ZIM files (the [OpenZIM](https://wiki.openzim.org/wiki/OpenZIM) archive format used by Kiwix for offline wiki content). It is a pure-Go implementation with no CGo dependencies.
 
 - **Module:** `github.com/stazelabs/gozim`
-- **Go version:** 1.22+
+- **Go version:** 1.24+
 - **Status:** Active development — core reading and HTTP server complete
 
 ## Repository Structure

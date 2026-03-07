@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 )
 
 // Entry represents a directory entry in a ZIM file.
@@ -25,6 +26,9 @@ type Entry struct {
 	// Redirect entry fields (valid when IsRedirect())
 	redirectIdx uint32
 }
+
+// Index returns the entry's position in the URL-ordered pointer list.
+func (e Entry) Index() uint32 { return e.index }
 
 // Path returns the entry's path (without namespace prefix).
 func (e Entry) Path() string { return e.path }
@@ -116,6 +120,34 @@ func (e Entry) ReadContent() ([]byte, error) {
 		return nil, err
 	}
 	return blob.Bytes(), nil
+}
+
+// ContentSize resolves redirects and returns the content size in bytes.
+// The cluster is decompressed and cached if not already, but no data is copied.
+func (e Entry) ContentSize() (int64, error) {
+	resolved, err := e.Resolve()
+	if err != nil {
+		return 0, err
+	}
+	item, err := resolved.Item()
+	if err != nil {
+		return 0, err
+	}
+	return item.Size()
+}
+
+// ContentReader resolves redirects and returns an io.Reader over the content.
+// The cluster is decompressed and cached if not already.
+func (e Entry) ContentReader() (io.Reader, error) {
+	resolved, err := e.Resolve()
+	if err != nil {
+		return nil, err
+	}
+	item, err := resolved.Item()
+	if err != nil {
+		return nil, err
+	}
+	return item.Reader()
 }
 
 // parseDirectoryEntry parses a directory entry from raw bytes at the given position.
