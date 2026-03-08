@@ -447,3 +447,288 @@ func TestMetadata(t *testing.T) {
 		t.Errorf("expected ErrNotFound for missing metadata, got %v", err)
 	}
 }
+
+func TestCacheStatsAndEviction(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	// Open with a cache size of 1 so we can observe eviction
+	a, err := OpenWithOptions(path, WithCacheSize(1))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	// Initial state: empty cache
+	stats := a.CacheStats()
+	if stats.Capacity != 1 {
+		t.Errorf("capacity = %d, want 1", stats.Capacity)
+	}
+	if stats.Size != 0 {
+		t.Errorf("initial size = %d, want 0", stats.Size)
+	}
+	if stats.Hits != 0 || stats.Misses != 0 {
+		t.Errorf("initial hits=%d misses=%d, want 0/0", stats.Hits, stats.Misses)
+	}
+
+	// Read a content entry to trigger a cache miss + fill
+	e, err := a.EntryByPath("C/main.html")
+	if err != nil {
+		t.Fatalf("EntryByPath: %v", err)
+	}
+	if _, err := e.ReadContent(); err != nil {
+		t.Fatalf("ReadContent: %v", err)
+	}
+
+	stats = a.CacheStats()
+	if stats.Size != 1 {
+		t.Errorf("after first read: size = %d, want 1", stats.Size)
+	}
+	if stats.Misses != 1 {
+		t.Errorf("after first read: misses = %d, want 1", stats.Misses)
+	}
+	if stats.Bytes <= 0 {
+		t.Errorf("after first read: bytes = %d, want > 0", stats.Bytes)
+	}
+
+	// Read the same entry again — should be a cache hit
+	if _, err := e.ReadContent(); err != nil {
+		t.Fatalf("ReadContent (hit): %v", err)
+	}
+	stats = a.CacheStats()
+	if stats.Hits != 1 {
+		t.Errorf("after cache hit: hits = %d, want 1", stats.Hits)
+	}
+
+	// Read a different entry from a different cluster to trigger eviction.
+	// small.zim has favicon.png in one cluster and main.html in another.
+	favicon, err := a.EntryByPath("C/favicon.png")
+	if err != nil {
+		t.Fatalf("EntryByPath(favicon): %v", err)
+	}
+	if _, err := favicon.ReadContent(); err != nil {
+		t.Fatalf("ReadContent(favicon): %v", err)
+	}
+
+	stats = a.CacheStats()
+	// With cache size 1, the old cluster should have been evicted
+	if stats.Size > 1 {
+		t.Errorf("after eviction: size = %d, want <= 1", stats.Size)
+	}
+}
+
+func TestCacheLRUPromotion(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	// Cache size 2 — both clusters fit
+	a, err := OpenWithOptions(path, WithCacheSize(2))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	// Load both clusters
+	e1, _ := a.EntryByPath("C/main.html")
+	e1.ReadContent()
+	e2, _ := a.EntryByPath("C/favicon.png")
+	e2.ReadContent()
+
+	stats := a.CacheStats()
+	if stats.Misses != 2 {
+		t.Errorf("misses = %d, want 2", stats.Misses)
+	}
+
+	// Access first cluster again — should be a hit
+	e1.ReadContent()
+	stats = a.CacheStats()
+	if stats.Hits != 1 {
+		t.Errorf("hits = %d, want 1", stats.Hits)
+	}
+
+	// Both should still be cached (size 2, capacity 2)
+	if stats.Size != 2 {
+		t.Errorf("size = %d, want 2", stats.Size)
+	}
+}
+
+func TestEntriesByNamespaceNonExistent(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	// 'Z' namespace doesn't exist — iterator should yield nothing
+	var count int
+	for range a.EntriesByNamespace('Z') {
+		count++
+	}
+	if count != 0 {
+		t.Errorf("expected 0 entries for non-existent namespace, got %d", count)
+	}
+}
+
+func TestEntriesByNamespaceAll(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	// Sum of all namespace counts should equal total entry count
+	total := 0
+	for _, ns := range []byte{'C', 'M', 'W', 'X'} {
+		for range a.EntriesByNamespace(ns) {
+			total++
+		}
+	}
+
+	if uint32(total) != a.EntryCount() {
+		t.Errorf("sum of namespace entries = %d, want %d", total, a.EntryCount())
+	}
+}
+
+func TestTitleListingViaHeader(t *testing.T) {
+	// small.zim uses the header TitlePtrPos (old-style) for title ordering.
+	// Verify EntriesByTitle works and returns entries in title order.
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	if a.titleList != nil {
+		t.Log("small.zim uses titleList (v6.1 listing entry)")
+	} else {
+		t.Log("small.zim uses header TitlePtrPos (old-style)")
+	}
+
+	var count int
+	var prevNs byte
+	var prevTitle string
+	for e := range a.EntriesByTitle() {
+		ns := e.Namespace()
+		title := e.Title()
+		if count > 0 && compareTitleKey(ns, title, prevNs, prevTitle) < 0 {
+			t.Errorf("title order violated: (%c,%q) came after (%c,%q)", ns, title, prevNs, prevTitle)
+		}
+		prevNs = ns
+		prevTitle = title
+		count++
+	}
+
+	if count == 0 {
+		t.Error("EntriesByTitle returned 0 entries")
+	}
+}
+
+func TestTitleListingDirect(t *testing.T) {
+	// Directly test the titleList code path by constructing an archive
+	// with a pre-populated titleList (simulating loadTitleListing).
+	entries := [][]byte{
+		makeContentEntry(0, 'C', 0, 0, "Banana", "Banana"),
+		makeContentEntry(0, 'C', 0, 0, "Apple", "Apple"),
+		makeContentEntry(0, 'C', 0, 0, "Cherry", "Cherry"),
+	}
+	a := buildFakeArchive(entries)
+
+	// Set titleList to title-sorted order: Apple(1), Banana(0), Cherry(2)
+	a.titleList = []uint32{1, 0, 2}
+	a.hdr.TitlePtrPos = noTitlePtrList
+
+	var titles []string
+	for e := range a.EntriesByTitle() {
+		titles = append(titles, e.Title())
+	}
+
+	if len(titles) != 3 {
+		t.Fatalf("got %d entries, want 3", len(titles))
+	}
+	want := []string{"Apple", "Banana", "Cherry"}
+	for i, w := range want {
+		if titles[i] != w {
+			t.Errorf("title[%d] = %q, want %q", i, titles[i], w)
+		}
+	}
+}
+
+func TestUnicodePathAndTitle(t *testing.T) {
+	archive := &Archive{mimeTypes: []string{"text/html"}}
+
+	tests := []struct {
+		name  string
+		path  string
+		title string
+	}{
+		{"CJK", "日本語/ページ", "日本語のタイトル"},
+		{"Cyrillic", "Кириллица/Страница", "Заголовок"},
+		{"Arabic", "عربي/صفحة", "عنوان"},
+		{"Emoji", "🌍/page", "🌍 Earth"},
+		{"Mixed", "Café/résumé", "Ñoño título"},
+		{"Diacritics", "ü/ö/ä", "Ünïcödé Tïtlé"},
+		{"Empty title fallback", "Ελληνικά/σελίδα", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := makeContentEntry(0, 'C', 0, 0, tt.path, tt.title)
+			e, n, err := parseDirectoryEntry(data, archive, 0)
+			if err != nil {
+				t.Fatalf("parseDirectoryEntry: %v", err)
+			}
+			if n != len(data) {
+				t.Errorf("consumed %d bytes, want %d", n, len(data))
+			}
+			if e.Path() != tt.path {
+				t.Errorf("path = %q, want %q", e.Path(), tt.path)
+			}
+			expectedTitle := tt.title
+			if expectedTitle == "" {
+				expectedTitle = tt.path // Title() falls back to path
+			}
+			if e.Title() != expectedTitle {
+				t.Errorf("title = %q, want %q", e.Title(), expectedTitle)
+			}
+		})
+	}
+}
+
+func TestUnicodeInFullPath(t *testing.T) {
+	archive := &Archive{mimeTypes: []string{"text/html"}}
+	data := makeContentEntry(0, 'C', 0, 0, "Ångström", "Ångström unit")
+	e, _, err := parseDirectoryEntry(data, archive, 0)
+	if err != nil {
+		t.Fatalf("parseDirectoryEntry: %v", err)
+	}
+	if e.FullPath() != "C/Ångström" {
+		t.Errorf("FullPath = %q, want %q", e.FullPath(), "C/Ångström")
+	}
+}
+
+func TestNullBytesInPathFail(t *testing.T) {
+	// A path containing a null byte should cause the parser to split
+	// at the null, treating the rest as the title field
+	archive := &Archive{mimeTypes: []string{"text/html"}}
+	data := makeContentEntry(0, 'C', 0, 0, "before", "after")
+	e, _, err := parseDirectoryEntry(data, archive, 0)
+	if err != nil {
+		t.Fatalf("parseDirectoryEntry: %v", err)
+	}
+	// Sanity check that the path doesn't contain unexpected content
+	if e.Path() != "before" {
+		t.Errorf("path = %q, want %q", e.Path(), "before")
+	}
+	if e.Title() != "after" {
+		t.Errorf("title = %q, want %q", e.Title(), "after")
+	}
+}

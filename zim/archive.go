@@ -244,9 +244,9 @@ func (a *Archive) EntryByIndex(idx uint32) (Entry, error) {
 // readEntryAt reads a directory entry from the given file offset.
 func (a *Archive) readEntryAt(offset int64, index uint32) (Entry, error) {
 	// Read enough data for the entry. Directory entries are variable-length
-	// but typically under 512 bytes. Use a stack-allocated buffer for common
-	// cases and fall back to heap for entries near end of file.
-	var stackBuf [512]byte
+	// but typically under 2 KiB. Use a stack-allocated buffer for common
+	// cases and fall back to a larger heap buffer if parsing fails.
+	var stackBuf [2048]byte
 	n := int64(len(stackBuf))
 	if offset+n > a.r.Size() {
 		n = a.r.Size() - offset

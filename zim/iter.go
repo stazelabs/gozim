@@ -8,7 +8,7 @@ func (a *Archive) Entries() iter.Seq[Entry] {
 		for i := uint32(0); i < a.hdr.EntryCount; i++ {
 			e, err := a.EntryByIndex(i)
 			if err != nil {
-				return
+				continue // skip unparseable entries
 			}
 			if !yield(e) {
 				return
@@ -26,7 +26,7 @@ func (a *Archive) EntriesByNamespace(ns byte) iter.Seq[Entry] {
 		for i := lo; i < hi; i++ {
 			e, err := a.EntryByIndex(i)
 			if err != nil {
-				return
+				continue // skip unparseable entries
 			}
 			if !yield(e) {
 				return

@@ -45,3 +45,68 @@ func TestParseMIMEListNoTerminator(t *testing.T) {
 		t.Errorf("got %d types, want 2", len(types))
 	}
 }
+
+func TestParseMIMEListWithParams(t *testing.T) {
+	// MIME types can include parameters like charset
+	data := []byte("text/html; charset=utf-8\x00application/json\x00\x00")
+	types := parseMIMEList(data)
+	if len(types) != 2 {
+		t.Fatalf("got %d types, want 2", len(types))
+	}
+	if types[0] != "text/html; charset=utf-8" {
+		t.Errorf("types[0] = %q, want %q", types[0], "text/html; charset=utf-8")
+	}
+}
+
+func TestParseMIMEListConsecutiveNulls(t *testing.T) {
+	// Two consecutive nulls after a type means: type + terminator
+	// The second null starts an empty string which terminates the list
+	data := []byte("text/html\x00\x00extra/ignored\x00\x00")
+	types := parseMIMEList(data)
+	if len(types) != 1 {
+		t.Errorf("got %d types, want 1 (list should stop at empty string): %v", len(types), types)
+	}
+}
+
+func TestParseMIMEListLongType(t *testing.T) {
+	// Very long MIME type name
+	longType := "application/" + string(make([]byte, 300))
+	for i := 12; i < len(longType); i++ {
+		longType = longType[:i] + string(rune('a'+i%26)) + longType[i+1:]
+	}
+	// Build it properly
+	buf := make([]byte, 300)
+	for i := range buf {
+		buf[i] = 'a' + byte(i%26)
+	}
+	longMIME := "application/" + string(buf)
+	data := append([]byte(longMIME), 0, 0)
+	types := parseMIMEList(data)
+	if len(types) != 1 {
+		t.Fatalf("got %d types, want 1", len(types))
+	}
+	if types[0] != longMIME {
+		t.Errorf("type length = %d, want %d", len(types[0]), len(longMIME))
+	}
+}
+
+func TestParseMIMEListNoData(t *testing.T) {
+	types := parseMIMEList(nil)
+	if len(types) != 0 {
+		t.Errorf("got %d types for nil input, want 0", len(types))
+	}
+
+	types = parseMIMEList([]byte{})
+	if len(types) != 0 {
+		t.Errorf("got %d types for empty input, want 0", len(types))
+	}
+}
+
+func TestParseMIMEListNoTrailingNull(t *testing.T) {
+	// Data that doesn't end with a null — no complete type can be parsed
+	data := []byte("text/html")
+	types := parseMIMEList(data)
+	if len(types) != 0 {
+		t.Errorf("got %d types for unterminated data, want 0", len(types))
+	}
+}

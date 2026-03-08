@@ -3,6 +3,7 @@ package zim
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -139,5 +140,221 @@ func TestEntryRedirectTargetOnContent(t *testing.T) {
 	_, err = e.RedirectTarget()
 	if !errors.Is(err, ErrNotRedirect) {
 		t.Errorf("expected ErrNotRedirect, got %v", err)
+	}
+}
+
+func TestParseLongPathAndTitle(t *testing.T) {
+	archive := &Archive{mimeTypes: []string{"text/html"}}
+
+	// Simulate the bug scenario: 255-char path + 245-char title
+	// Fixed header for content entry = 16 bytes
+	// path (255) + null (1) + title (245) + null (1) = 518 total bytes
+	pathBytes := make([]byte, 255)
+	titleBytes := make([]byte, 245)
+	for i := range pathBytes {
+		pathBytes[i] = 'a' + byte(i%26)
+	}
+	for i := range titleBytes {
+		titleBytes[i] = 'A' + byte(i%26)
+	}
+	path := string(pathBytes)
+	title := string(titleBytes)
+
+	data := makeContentEntry(0, 'C', 1, 0, path, title)
+
+	// This would fail with a 512-byte buffer (data is 518 bytes)
+	if len(data) <= 512 {
+		t.Fatalf("test data should exceed 512 bytes, got %d", len(data))
+	}
+
+	e, n, err := parseDirectoryEntry(data, archive, 0)
+	if err != nil {
+		t.Fatalf("unexpected error parsing long entry (%d bytes): %v", len(data), err)
+	}
+	if n != len(data) {
+		t.Errorf("consumed %d bytes, want %d", n, len(data))
+	}
+	if e.Path() != path {
+		t.Errorf("path length = %d, want %d", len(e.Path()), len(path))
+	}
+	if e.Title() != title {
+		t.Errorf("title length = %d, want %d", len(e.Title()), len(title))
+	}
+}
+
+func TestParseTruncatedLongEntry(t *testing.T) {
+	archive := &Archive{mimeTypes: []string{"text/html"}}
+
+	// Create an entry with long path+title, then truncate the buffer
+	// to simulate what happened with the 512-byte buffer
+	pathBytes := make([]byte, 255)
+	titleBytes := make([]byte, 245)
+	for i := range pathBytes {
+		pathBytes[i] = 'x'
+	}
+	for i := range titleBytes {
+		titleBytes[i] = 'y'
+	}
+
+	data := makeContentEntry(0, 'C', 1, 0, string(pathBytes), string(titleBytes))
+
+	// Truncate to 512 bytes — should fail because title's null terminator is cut off
+	truncated := data[:512]
+	_, _, err := parseDirectoryEntry(truncated, archive, 0)
+	if err == nil {
+		t.Error("expected error when parsing truncated entry, got nil")
+	}
+}
+
+func TestResolveRedirectChain(t *testing.T) {
+	// Build a fake archive with: entry 0 -> redirect to 1 -> redirect to 2 -> content
+	entries := [][]byte{
+		makeRedirectEntry('C', 1, "Alias1", ""),
+		makeRedirectEntry('C', 2, "Alias2", ""),
+		makeContentEntry(0, 'C', 0, 0, "RealPage", "Real Page"),
+	}
+	a := buildFakeArchive(entries)
+
+	e, err := a.EntryByIndex(0)
+	if err != nil {
+		t.Fatalf("EntryByIndex(0): %v", err)
+	}
+
+	resolved, err := e.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.IsRedirect() {
+		t.Error("resolved entry is still a redirect")
+	}
+	if resolved.Path() != "RealPage" {
+		t.Errorf("resolved path = %q, want %q", resolved.Path(), "RealPage")
+	}
+}
+
+func TestResolveDeepRedirectChain(t *testing.T) {
+	// 10-entry redirect chain: 0->1->2->...->9 (content)
+	n := 10
+	entries := make([][]byte, n)
+	for i := 0; i < n-1; i++ {
+		entries[i] = makeRedirectEntry('C', uint32(i+1), fmt.Sprintf("Redirect%d", i), "")
+	}
+	entries[n-1] = makeContentEntry(0, 'C', 0, 0, "FinalPage", "Final")
+	a := buildFakeArchive(entries)
+
+	e, err := a.EntryByIndex(0)
+	if err != nil {
+		t.Fatalf("EntryByIndex(0): %v", err)
+	}
+
+	resolved, err := e.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve 10-deep chain: %v", err)
+	}
+	if resolved.Path() != "FinalPage" {
+		t.Errorf("resolved path = %q, want %q", resolved.Path(), "FinalPage")
+	}
+}
+
+func TestResolveRedirectLoop(t *testing.T) {
+	// entry 0 -> 1 -> 0 (cycle)
+	entries := [][]byte{
+		makeRedirectEntry('C', 1, "LoopA", ""),
+		makeRedirectEntry('C', 0, "LoopB", ""),
+	}
+	a := buildFakeArchive(entries)
+
+	e, err := a.EntryByIndex(0)
+	if err != nil {
+		t.Fatalf("EntryByIndex(0): %v", err)
+	}
+
+	_, err = e.Resolve()
+	if !errors.Is(err, ErrRedirectLoop) {
+		t.Errorf("expected ErrRedirectLoop, got: %v", err)
+	}
+}
+
+func TestResolveSelfRedirect(t *testing.T) {
+	// entry 0 -> 0 (self-loop)
+	entries := [][]byte{
+		makeRedirectEntry('C', 0, "SelfLoop", ""),
+	}
+	a := buildFakeArchive(entries)
+
+	e, err := a.EntryByIndex(0)
+	if err != nil {
+		t.Fatalf("EntryByIndex(0): %v", err)
+	}
+
+	_, err = e.Resolve()
+	if !errors.Is(err, ErrRedirectLoop) {
+		t.Errorf("expected ErrRedirectLoop for self-redirect, got: %v", err)
+	}
+}
+
+func TestResolveRedirectToBrokenTarget(t *testing.T) {
+	// entry 0 -> 1, but entry 1 is corrupt
+	entries := [][]byte{
+		makeRedirectEntry('C', 1, "GoodRedirect", ""),
+		nil, // corrupt target
+	}
+	a := buildFakeArchive(entries)
+
+	e, err := a.EntryByIndex(0)
+	if err != nil {
+		t.Fatalf("EntryByIndex(0): %v", err)
+	}
+
+	_, err = e.Resolve()
+	if err == nil {
+		t.Error("expected error resolving redirect to corrupt entry, got nil")
+	}
+}
+
+func TestResolveNonRedirect(t *testing.T) {
+	// Resolve on a content entry should return itself
+	entries := [][]byte{
+		makeContentEntry(0, 'C', 0, 0, "Content", "Content Page"),
+	}
+	a := buildFakeArchive(entries)
+
+	e, err := a.EntryByIndex(0)
+	if err != nil {
+		t.Fatalf("EntryByIndex(0): %v", err)
+	}
+
+	resolved, err := e.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Path() != "Content" {
+		t.Errorf("resolved path = %q, want %q", resolved.Path(), "Content")
+	}
+}
+
+func TestRedirectTargetFollowsChain(t *testing.T) {
+	// RedirectTarget should return the immediate target, not the final one
+	entries := [][]byte{
+		makeRedirectEntry('C', 1, "First", ""),
+		makeRedirectEntry('C', 2, "Second", ""),
+		makeContentEntry(0, 'C', 0, 0, "Third", ""),
+	}
+	a := buildFakeArchive(entries)
+
+	e, err := a.EntryByIndex(0)
+	if err != nil {
+		t.Fatalf("EntryByIndex(0): %v", err)
+	}
+
+	target, err := e.RedirectTarget()
+	if err != nil {
+		t.Fatalf("RedirectTarget: %v", err)
+	}
+	if target.Path() != "Second" {
+		t.Errorf("immediate target path = %q, want %q", target.Path(), "Second")
+	}
+	if !target.IsRedirect() {
+		t.Error("immediate target should still be a redirect")
 	}
 }

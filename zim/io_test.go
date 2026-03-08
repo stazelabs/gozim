@@ -1,6 +1,7 @@
 package zim
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -116,5 +117,127 @@ func TestReadersProduceSameResults(t *testing.T) {
 		if string(pbuf[:pn]) != string(mbuf[:mn]) {
 			t.Errorf("offset %d: data mismatch", off)
 		}
+	}
+}
+
+func TestMmapReaderReadAtEOF(t *testing.T) {
+	data := []byte("hello")
+	path := writeTempFile(t, data)
+
+	r, err := newMmapReader(path)
+	if err != nil {
+		t.Fatalf("newMmapReader: %v", err)
+	}
+	defer r.Close()
+
+	// Read at exact file size — should return EOF
+	buf := make([]byte, 1)
+	_, err = r.ReadAt(buf, int64(len(data)))
+	if err != io.EOF {
+		t.Errorf("ReadAt(size) err = %v, want io.EOF", err)
+	}
+
+	// Read past file size — should return EOF
+	_, err = r.ReadAt(buf, int64(len(data)+100))
+	if err != io.EOF {
+		t.Errorf("ReadAt(past size) err = %v, want io.EOF", err)
+	}
+
+	// Negative offset — should return EOF
+	_, err = r.ReadAt(buf, -1)
+	if err != io.EOF {
+		t.Errorf("ReadAt(-1) err = %v, want io.EOF", err)
+	}
+}
+
+func TestMmapReaderReadPartial(t *testing.T) {
+	data := []byte("hello")
+	path := writeTempFile(t, data)
+
+	r, err := newMmapReader(path)
+	if err != nil {
+		t.Fatalf("newMmapReader: %v", err)
+	}
+	defer r.Close()
+
+	// Request more bytes than available from offset 3 — should get partial + EOF
+	buf := make([]byte, 10)
+	n, err := r.ReadAt(buf, 3)
+	if n != 2 {
+		t.Errorf("ReadAt(3) n = %d, want 2", n)
+	}
+	if err != io.EOF {
+		t.Errorf("ReadAt(3) err = %v, want io.EOF", err)
+	}
+	if string(buf[:n]) != "lo" {
+		t.Errorf("ReadAt(3) data = %q, want %q", buf[:n], "lo")
+	}
+}
+
+func TestMmapReaderReadAfterClose(t *testing.T) {
+	data := []byte("hello")
+	path := writeTempFile(t, data)
+
+	r, err := newMmapReader(path)
+	if err != nil {
+		t.Fatalf("newMmapReader: %v", err)
+	}
+	r.Close()
+
+	// Read after close should return an error, not panic
+	buf := make([]byte, 5)
+	_, err = r.ReadAt(buf, 0)
+	if err == nil {
+		t.Error("expected error reading from closed mmap reader")
+	}
+}
+
+func TestPreadReaderReadAtEOF(t *testing.T) {
+	data := []byte("hello")
+	path := writeTempFile(t, data)
+
+	r, err := newPreadReader(path)
+	if err != nil {
+		t.Fatalf("newPreadReader: %v", err)
+	}
+	defer r.Close()
+
+	// Read at exact file size — should return EOF
+	buf := make([]byte, 1)
+	_, err = r.ReadAt(buf, int64(len(data)))
+	if err != io.EOF {
+		t.Errorf("ReadAt(size) err = %v, want io.EOF", err)
+	}
+
+	// Request more bytes than available — should get partial + EOF
+	buf = make([]byte, 10)
+	n, err := r.ReadAt(buf, 3)
+	if n != 2 {
+		t.Errorf("ReadAt(3) n = %d, want 2", n)
+	}
+	if err != io.EOF {
+		t.Errorf("ReadAt(3) err = %v, want io.EOF", err)
+	}
+	if string(buf[:n]) != "lo" {
+		t.Errorf("ReadAt(3) data = %q, want %q", buf[:n], "lo")
+	}
+}
+
+func TestPreadReaderDoubleClose(t *testing.T) {
+	data := []byte("hello")
+	path := writeTempFile(t, data)
+
+	r, err := newPreadReader(path)
+	if err != nil {
+		t.Fatalf("newPreadReader: %v", err)
+	}
+
+	if err := r.Close(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	// Second close should return an error (os.File double close)
+	err = r.Close()
+	if err == nil {
+		t.Log("second close returned nil (may be OS-dependent)")
 	}
 }

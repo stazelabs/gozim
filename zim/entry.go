@@ -52,6 +52,14 @@ func (e Entry) Namespace() byte { return e.namespace }
 // IsRedirect returns true if this entry is a redirect.
 func (e Entry) IsRedirect() bool { return e.mimeIndex == mimeRedirect }
 
+// ClusterNum returns the cluster number for this content entry.
+// Only valid for non-redirect entries.
+func (e Entry) ClusterNum() uint32 { return e.clusterNum }
+
+// BlobNum returns the blob number within the cluster for this content entry.
+// Only valid for non-redirect entries.
+func (e Entry) BlobNum() uint32 { return e.blobNum }
+
 // MIMEType returns the MIME type string for this entry.
 // Returns an empty string for redirect entries.
 func (e Entry) MIMEType() string {

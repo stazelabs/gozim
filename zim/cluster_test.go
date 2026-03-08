@@ -1,8 +1,12 @@
 package zim
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
+	"github.com/ulikunitz/xz"
 )
 
 func makeUncompressedCluster(blobs ...[]byte) []byte {
@@ -133,5 +137,133 @@ func TestParseClusterEmptyBlob(t *testing.T) {
 	}
 	if len(c.blobs) != 1 || len(c.blobs[0]) != 0 {
 		t.Errorf("expected 1 empty blob, got %v", c.blobs)
+	}
+}
+
+// makeRawClusterPayload builds the uncompressed offset+blob payload (without
+// the info byte) so it can be compressed externally.
+func makeRawClusterPayload(blobs ...[]byte) []byte {
+	numBlobs := len(blobs)
+	numOffsets := numBlobs + 1
+	headerSize := numOffsets * 4
+
+	offsets := make([]uint32, numOffsets)
+	pos := uint32(headerSize)
+	for i, b := range blobs {
+		offsets[i] = pos
+		pos += uint32(len(b))
+	}
+	offsets[numBlobs] = pos
+
+	offsetData := make([]byte, headerSize)
+	for i, off := range offsets {
+		binary.LittleEndian.PutUint32(offsetData[i*4:], off)
+	}
+
+	data := offsetData
+	for _, b := range blobs {
+		data = append(data, b...)
+	}
+	return data
+}
+
+func TestParseClusterZstd(t *testing.T) {
+	blob1 := []byte("Hello from zstd compressed cluster!")
+	blob2 := []byte("Second zstd blob with different content")
+	payload := makeRawClusterPayload(blob1, blob2)
+
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd.NewWriter: %v", err)
+	}
+	compressed := enc.EncodeAll(payload, nil)
+	enc.Close()
+
+	// info byte: compZstd (5)
+	clusterData := append([]byte{compZstd}, compressed...)
+
+	c, err := parseCluster(clusterData)
+	if err != nil {
+		t.Fatalf("parseCluster(zstd): %v", err)
+	}
+	if len(c.blobs) != 2 {
+		t.Fatalf("got %d blobs, want 2", len(c.blobs))
+	}
+	if string(c.blobs[0]) != string(blob1) {
+		t.Errorf("blob[0] = %q, want %q", c.blobs[0], blob1)
+	}
+	if string(c.blobs[1]) != string(blob2) {
+		t.Errorf("blob[1] = %q, want %q", c.blobs[1], blob2)
+	}
+}
+
+func TestParseClusterXZ(t *testing.T) {
+	blob1 := []byte("Hello from XZ/LZMA compressed cluster!")
+	blob2 := []byte("Another XZ blob here")
+	payload := makeRawClusterPayload(blob1, blob2)
+
+	var buf bytes.Buffer
+	w, err := xz.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("xz.NewWriter: %v", err)
+	}
+	if _, err := w.Write(payload); err != nil {
+		t.Fatalf("xz write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("xz close: %v", err)
+	}
+
+	// info byte: compLZMA (4)
+	clusterData := append([]byte{compLZMA}, buf.Bytes()...)
+
+	c, err := parseCluster(clusterData)
+	if err != nil {
+		t.Fatalf("parseCluster(xz): %v", err)
+	}
+	if len(c.blobs) != 2 {
+		t.Fatalf("got %d blobs, want 2", len(c.blobs))
+	}
+	if string(c.blobs[0]) != string(blob1) {
+		t.Errorf("blob[0] = %q, want %q", c.blobs[0], blob1)
+	}
+	if string(c.blobs[1]) != string(blob2) {
+		t.Errorf("blob[1] = %q, want %q", c.blobs[1], blob2)
+	}
+}
+
+func TestParseClusterZstdCorrupt(t *testing.T) {
+	// info byte = zstd, followed by garbage
+	clusterData := []byte{compZstd, 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01}
+	_, err := parseCluster(clusterData)
+	if err == nil {
+		t.Error("expected error for corrupt zstd data")
+	}
+}
+
+func TestParseClusterXZCorrupt(t *testing.T) {
+	// info byte = LZMA, followed by garbage
+	clusterData := []byte{compLZMA, 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01}
+	_, err := parseCluster(clusterData)
+	if err == nil {
+		t.Error("expected error for corrupt xz data")
+	}
+}
+
+func TestParseClusterDeprecatedCompression(t *testing.T) {
+	for _, comp := range []byte{compZlib, compBZ2} {
+		clusterData := []byte{comp, 0x00}
+		_, err := parseCluster(clusterData)
+		if err == nil {
+			t.Errorf("expected error for deprecated compression type %d", comp)
+		}
+	}
+}
+
+func TestParseClusterUnknownCompression(t *testing.T) {
+	clusterData := []byte{0x0F, 0x00} // type 15, unknown
+	_, err := parseCluster(clusterData)
+	if err == nil {
+		t.Error("expected error for unknown compression type")
 	}
 }
