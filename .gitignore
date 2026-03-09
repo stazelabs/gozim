@@ -9,6 +9,9 @@
 /zimverify
 /*.test
 
+# Goreleaser output
+/dist/
+
 # Coverage output
 coverage*.out
 
