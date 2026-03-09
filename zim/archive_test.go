@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -148,6 +149,143 @@ func TestReadContent(t *testing.T) {
 				preview = preview[:200] + "..."
 			}
 			t.Logf("  Preview: %s", preview)
+		}
+	}
+}
+
+func TestBlobCopy(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	for i := uint32(0); i < a.EntryCount(); i++ {
+		e, err := a.EntryByIndex(i)
+		if err != nil {
+			t.Fatalf("EntryByIndex(%d): %v", i, err)
+		}
+		if e.IsRedirect() {
+			continue
+		}
+		item, err := e.Item()
+		if err != nil {
+			t.Fatalf("Item for %s: %v", e.FullPath(), err)
+		}
+		blob, err := item.Data()
+		if err != nil {
+			t.Fatalf("Data for %s: %v", e.FullPath(), err)
+		}
+		original := blob.Bytes()
+		copied := blob.Copy()
+
+		if len(original) != len(copied) {
+			t.Errorf("Copy size mismatch for %s: %d vs %d", e.FullPath(), len(original), len(copied))
+			continue
+		}
+		for j := range original {
+			if original[j] != copied[j] {
+				t.Errorf("Copy content mismatch for %s at byte %d", e.FullPath(), j)
+				break
+			}
+		}
+		// Verify independence: modifying the copy doesn't affect the original
+		if len(copied) > 0 {
+			copied[0] ^= 0xFF
+			if original[0] == copied[0] {
+				t.Errorf("Copy aliases original for %s", e.FullPath())
+			}
+		}
+		break // one entry is sufficient
+	}
+}
+
+func TestBlobCopyNil(t *testing.T) {
+	b := Blob{}
+	if cp := b.Copy(); cp != nil {
+		t.Errorf("Copy of nil blob = %v, want nil", cp)
+	}
+}
+
+func TestReadContentCopy(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	for i := uint32(0); i < a.EntryCount(); i++ {
+		e, err := a.EntryByIndex(i)
+		if err != nil {
+			t.Fatalf("EntryByIndex(%d): %v", i, err)
+		}
+		if e.IsRedirect() {
+			continue
+		}
+		original, err := e.ReadContent()
+		if err != nil {
+			t.Fatalf("ReadContent for %s: %v", e.FullPath(), err)
+		}
+		copied, err := e.ReadContentCopy()
+		if err != nil {
+			t.Fatalf("ReadContentCopy for %s: %v", e.FullPath(), err)
+		}
+		if string(original) != string(copied) {
+			t.Errorf("ReadContentCopy mismatch for %s", e.FullPath())
+		}
+	}
+}
+
+func TestReadContentCopySurvivesEviction(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	// Cache size 1: reading a second cluster evicts the first
+	a, err := OpenWithOptions(path, WithCacheSize(1))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	// Collect all non-redirect entries
+	type saved struct {
+		path string
+		data []byte
+	}
+	var entries []saved
+	for i := uint32(0); i < a.EntryCount(); i++ {
+		e, err := a.EntryByIndex(i)
+		if err != nil {
+			t.Fatalf("EntryByIndex(%d): %v", i, err)
+		}
+		if e.IsRedirect() {
+			continue
+		}
+		data, err := e.ReadContentCopy()
+		if err != nil {
+			t.Fatalf("ReadContentCopy for %s: %v", e.FullPath(), err)
+		}
+		entries = append(entries, saved{path: e.FullPath(), data: data})
+	}
+
+	// Re-read everything and verify copies are still valid
+	for _, s := range entries {
+		e, err := a.EntryByPath(s.path)
+		if err != nil {
+			t.Fatalf("EntryByPath(%s): %v", s.path, err)
+		}
+		fresh, err := e.ReadContent()
+		if err != nil {
+			t.Fatalf("ReadContent for %s: %v", s.path, err)
+		}
+		if string(s.data) != string(fresh) {
+			t.Errorf("Saved copy differs from fresh read for %s", s.path)
 		}
 	}
 }
@@ -712,6 +850,79 @@ func TestUnicodeInFullPath(t *testing.T) {
 	}
 	if e.FullPath() != "C/Ångström" {
 		t.Errorf("FullPath = %q, want %q", e.FullPath(), "C/Ångström")
+	}
+}
+
+func TestConcurrentReadContent(t *testing.T) {
+	path := testdataPath("small.zim")
+	skipIfNoTestdata(t, path)
+
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer a.Close()
+
+	// Collect non-redirect entry indices
+	var indices []uint32
+	for i := uint32(0); i < a.EntryCount(); i++ {
+		e, err := a.EntryByIndex(i)
+		if err != nil {
+			t.Fatalf("EntryByIndex(%d): %v", i, err)
+		}
+		if !e.IsRedirect() {
+			indices = append(indices, i)
+		}
+	}
+	if len(indices) == 0 {
+		t.Skip("no content entries")
+	}
+
+	// Get reference content for each entry
+	reference := make(map[uint32]string)
+	for _, idx := range indices {
+		e, _ := a.EntryByIndex(idx)
+		data, err := e.ReadContent()
+		if err != nil {
+			t.Fatalf("ReadContent(%d): %v", idx, err)
+		}
+		reference[idx] = string(data)
+	}
+
+	// Read all entries concurrently from multiple goroutines
+	const goroutines = 8
+	const iterations = 10
+	var wg sync.WaitGroup
+	errCh := make(chan string, goroutines*len(indices)*iterations)
+
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for iter := 0; iter < iterations; iter++ {
+				for _, idx := range indices {
+					e, err := a.EntryByIndex(idx)
+					if err != nil {
+						errCh <- err.Error()
+						return
+					}
+					data, err := e.ReadContentCopy()
+					if err != nil {
+						errCh <- err.Error()
+						return
+					}
+					if string(data) != reference[idx] {
+						errCh <- "content mismatch for index " + e.FullPath()
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for msg := range errCh {
+		t.Error(msg)
 	}
 }
 

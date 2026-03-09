@@ -114,6 +114,11 @@ func (e Entry) Resolve() (Entry, error) {
 }
 
 // ReadContent resolves redirects and returns the content bytes.
+//
+// WARNING: The returned slice aliases the internal cluster cache and may be
+// invalidated when the cluster is evicted. If you need to buffer or retain
+// the data (e.g., when iterating many entries), use [Entry.ReadContentCopy]
+// instead.
 func (e Entry) ReadContent() ([]byte, error) {
 	resolved, err := e.Resolve()
 	if err != nil {
@@ -130,6 +135,25 @@ func (e Entry) ReadContent() ([]byte, error) {
 	return blob.Bytes(), nil
 }
 
+// ReadContentCopy resolves redirects and returns a newly allocated copy of
+// the content bytes. The returned slice is safe to retain indefinitely and
+// does not alias the cluster cache.
+func (e Entry) ReadContentCopy() ([]byte, error) {
+	resolved, err := e.Resolve()
+	if err != nil {
+		return nil, err
+	}
+	item, err := resolved.Item()
+	if err != nil {
+		return nil, err
+	}
+	blob, err := item.Data()
+	if err != nil {
+		return nil, err
+	}
+	return blob.Copy(), nil
+}
+
 // ContentSize resolves redirects and returns the content size in bytes.
 // The cluster is decompressed and cached if not already, but no data is copied.
 func (e Entry) ContentSize() (int64, error) {
@@ -138,6 +162,18 @@ func (e Entry) ContentSize() (int64, error) {
 		return 0, err
 	}
 	item, err := resolved.Item()
+	if err != nil {
+		return 0, err
+	}
+	return item.Size()
+}
+
+// BlobSize returns the uncompressed blob size for this content entry without
+// resolving redirects. Returns ErrIsRedirect if called on a redirect entry.
+// The cluster is decompressed and cached if not already, so iterating entries
+// in cluster order makes repeated calls essentially free.
+func (e Entry) BlobSize() (int64, error) {
+	item, err := e.Item()
 	if err != nil {
 		return 0, err
 	}
