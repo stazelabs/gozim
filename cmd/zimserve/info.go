@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -130,7 +131,7 @@ func (lib *library) handleInfo(w http.ResponseWriter, r *http.Request) {
 		mimeTypeRows[i] = infoMIMETypeRow{Index: i, MIME: m}
 	}
 
-	renderWith(w, tmplInfo, infoData{
+	data := infoData{
 		Slug:         slug,
 		Title:        ze.title,
 		Filename:     ze.filename,
@@ -157,7 +158,22 @@ func (lib *library) handleInfo(w http.ResponseWriter, r *http.Request) {
 		MIMECounts:    mimeCountRows,
 		RedirectCount: redirectCount,
 		MIMETypes:     mimeTypeRows,
-	})
+	}
+
+	if parts := a.SplitParts(); len(parts) > 0 {
+		data.IsSplit = true
+		var totalSize int64
+		for _, p := range parts {
+			totalSize += p.Size
+			data.SplitParts = append(data.SplitParts, infoSplitPart{
+				Filename: filepath.Base(p.Path),
+				Size:     formatBytes(p.Size),
+			})
+		}
+		data.SplitTotal = formatBytes(totalSize)
+	}
+
+	renderWith(w, tmplInfo, data)
 }
 
 func parseOffsetLimit(r *http.Request) (int, int) {

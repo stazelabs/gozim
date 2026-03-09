@@ -31,10 +31,10 @@ Phases 1–8 of [PLAN.md](docs/PLAN.md) are complete. This document tracks all r
 
 | # | Item | Rationale | Files | Status |
 |---|------|-----------|-------|--------|
-| 1.1 | **`multiReader`** — Implement a `reader` that presents split ZIM files (`.zimaa`, `.zimab`, …) as a single contiguous `io.ReaderAt`. | Wikipedia full dumps exceed 90 GB and are distributed as split files. Without this, gozim cannot open the most important ZIM files. | New `zim/multi.go` | `[ ]` |
-| 1.2 | **Auto-discovery of parts** — When `Open("foo.zimaa")` is called, detect and open `.zimab`, `.zimac`, etc. | Users should not need to enumerate parts manually. | `zim/archive.go` (`Open`/`OpenWithOptions`) | `[ ]` |
-| 1.3 | **Update CLI tools** — All tools should accept `.zimaa` files transparently. | Feature completeness. | `cmd/*/main.go` | `[ ]` |
-| 1.4 | **Multi-part tests** — Create or obtain a split test ZIM for CI. | Test coverage. | `testdata/`, new `zim/multi_test.go` | `[ ]` |
+| 1.1 | **`multiReader`** — Implement a `reader` that presents split ZIM files (`.zimaa`, `.zimab`, …) as a single contiguous `io.ReaderAt`. | Wikipedia full dumps exceed 90 GB and are distributed as split files. Without this, gozim cannot open the most important ZIM files. | New `zim/multi.go` | `[x]` |
+| 1.2 | **Auto-discovery of parts** — When `Open("foo.zimaa")` is called, detect and open `.zimab`, `.zimac`, etc. | Users should not need to enumerate parts manually. | `zim/archive.go` (`Open`/`OpenWithOptions`) | `[x]` |
+| 1.3 | **Update CLI tools** — All tools should accept `.zimaa` files transparently. | Feature completeness. | `cmd/*/main.go` (no changes needed — handled by `Open`) | `[x]` |
+| 1.4 | **Multi-part tests** — Create or obtain a split test ZIM for CI. | Test coverage. | `testdata/small_split.zim{aa,ab}`, `zim/multi_test.go` | `[x]` |
 
 ### Security & Robustness (continued)
 
@@ -66,12 +66,12 @@ Phases 1–8 of [PLAN.md](docs/PLAN.md) are complete. This document tracks all r
 
 | # | Item | Rationale | Files | Status |
 |---|------|-----------|-------|--------|
-| 2.1 | **LRU cache: O(1) promotion** — Replace linear scan of `cacheOrder` slice with `container/list` doubly-linked list + map. Current O(N) scan is fine for default 16 but degrades at larger cache sizes. | Users running zimserve with `--cache 256+` hit this on every cache hit. | `zim/archive.go` (`readCluster`) | `[ ]` |
+| 2.1 | **LRU cache: O(1) promotion** — Replace linear scan of `cacheOrder` slice with `container/list` doubly-linked list + map. Current O(N) scan is fine for default 16 but degrades at larger cache sizes. | Users running zimserve with `--cache 256+` hit this on every cache hit. | `zim/archive.go` (`readCluster`) | `[x]` |
 | 2.2 | **Transfer compression in zimserve** — Add gzip/brotli `Accept-Encoding` middleware. Text content (HTML, CSS, JS, JSON) benefits significantly. | Standard HTTP server feature; reduces bandwidth. | `cmd/zimserve/main.go` | `[ ]` |
 | 2.3 | **HEAD request optimization** — `handleContent` reads the full body even for HEAD. Skip body read after setting headers. | Avoids unnecessary decompression for HEAD (used by monitoring, link checkers). | `cmd/zimserve/handlers.go` | `[ ]` |
 | 2.4 | **HTTP Range request support (206)** — For large media blobs (video, audio), support `Range` headers via `http.ServeContent`. | Required for in-browser video/audio playback from ZIM files. | `cmd/zimserve/handlers.go` | `[ ]` |
 | 2.5 | **`EntriesInCluster` performance** — Currently O(EntryCount) full scan. Build a cluster-to-entries index lazily for repeated lookups. | Info page cluster detail view triggers O(N) per cluster. | `zim/archive.go` (`EntriesInCluster`) | `[ ]` |
-| 2.6 | **Metadata caching** — `Metadata()` re-reads from archive every call. Cache in a `sync.Once`-initialized map. | Metadata is read repeatedly (every page load, info pages). | `zim/archive.go` (`Metadata`) | `[ ]` |
+| 2.6 | **Metadata caching** — `Metadata()` re-reads from archive every call. Cache in a `sync.Once`-initialized map. | Metadata is read repeatedly (every page load, info pages). | `zim/archive.go` (`Metadata`) | `[x]` |
 
 ### API Gaps
 
@@ -94,7 +94,7 @@ Phases 1–8 of [PLAN.md](docs/PLAN.md) are complete. This document tracks all r
 
 | # | Item | Rationale | Files | Status |
 |---|------|-----------|-------|--------|
-| 2.14 | **`ziminfo --json`** — JSON output for scripting and pipeline integration. | Current text output is not machine-parseable. | `cmd/ziminfo/main.go` | `[ ]` |
+| 2.14 | **`ziminfo --json`** — JSON output for scripting and pipeline integration. | Current text output is not machine-parseable. | `cmd/ziminfo/main.go` | `[x]` |
 | 2.15 | **`zimverify --parallel N`** — Parallel checksum verification of multiple files. | Large collections take too long one-at-a-time. | `cmd/zimverify/main.go` | `[ ]` |
 | 2.16 | **`zimcat --progress`** — Progress indicator for large extractions. | UX improvement for multi-GB ZIM files. | `cmd/zimcat/main.go` | `[ ]` |
 
@@ -149,7 +149,7 @@ Phases 1–8 of [PLAN.md](docs/PLAN.md) are complete. This document tracks all r
 |---|------|-----------|-------|--------|
 | 3.14 | **Homebrew formula** — `brew install stazelabs/tap/gozim`. | Standard distribution channel for CLI tools. | Separate tap repo | `[ ]` |
 | 3.15 | **zimserve benchmarks** — HTTP throughput benchmarks via `testing.B` + `httptest`. | Quantifies performance for comparison and regression detection. | `cmd/zimserve/bench_test.go` | `[ ]` |
-| 3.16 | **32-bit platform documentation** — Document that ZIM files > 2 GB are unsupported on 32-bit (Go `int` is 32-bit, mmap disabled). | Prevents user confusion. Not a bug to fix. | `zim/doc.go` or README | `[ ]` |
+| 3.16 | **32-bit platform documentation** — Document that ZIM files > 2 GB are unsupported on 32-bit (Go `int` is 32-bit, mmap disabled). | Prevents user confusion. Not a bug to fix. | `zim/doc.go` or README | `[x]` |
 
 ---
 

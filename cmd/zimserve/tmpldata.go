@@ -77,6 +77,9 @@ type infoData struct {
 	MinorVersion  uint16
 	EntryCount    uint32
 	ClusterCount  uint32
+	IsSplit       bool
+	SplitParts    []infoSplitPart
+	SplitTotal    string
 	Cache         infoCacheData
 	HasMainEntry  bool
 	MainPath      string
@@ -88,6 +91,11 @@ type infoData struct {
 	MIMECounts    []infoMIMECountRow
 	RedirectCount int
 	MIMETypes     []infoMIMETypeRow
+}
+
+type infoSplitPart struct {
+	Filename string
+	Size     string
 }
 
 type infoCacheData struct {

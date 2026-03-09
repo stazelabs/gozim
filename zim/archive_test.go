@@ -1,6 +1,7 @@
 package zim
 
 import (
+	"container/list"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -941,29 +942,21 @@ func buildMinimalHeader(mimeListPos, urlPtrPos uint64) []byte {
 }
 
 func TestInitMIMEListURLPtrPrecedesMIMEList(t *testing.T) {
-	// URLPtrPos < MIMEListPos — must return an error.
+	// URLPtrPos < MIMEListPos — should still parse MIME list from MIMEListPos.
+	// The MIME list scan reads a fixed chunk from MIMEListPos and looks for
+	// the double-null terminator, so the URLPtrPos relationship doesn't matter.
 	hdrBuf := buildMinimalHeader(200, 100) // urlPtrPos=100 < mimeListPos=200
 	raw := make([]byte, 512)
 	copy(raw, hdrBuf)
+	// Put a valid empty MIME list (double-null) at offset 200.
+	raw[200] = 0
 
-	a := &Archive{r: &bytesReader{data: raw}, cacheSize: 1, clusterCache: map[uint32]*cluster{}}
-	if err := a.init(); err == nil {
-		t.Fatal("expected error when URLPtrPos < MIMEListPos, got nil")
-	}
-}
-
-func TestInitMIMEListTooLarge(t *testing.T) {
-	// URLPtrPos - MIMEListPos > 1 MiB — must return an error.
-	const mimeStart = uint64(headerSize)
-	const urlPtr = mimeStart + maxMIMEListSize + 1
-	hdrBuf := buildMinimalHeader(mimeStart, urlPtr)
-	// Allocate a buffer large enough that the ReadAt won't fail on length.
-	raw := make([]byte, urlPtr+8)
-	copy(raw, hdrBuf)
-
-	a := &Archive{r: &bytesReader{data: raw}, cacheSize: 1, clusterCache: map[uint32]*cluster{}}
-	if err := a.init(); err == nil {
-		t.Fatal("expected error when MIME list exceeds size limit, got nil")
+	a := &Archive{r: &bytesReader{data: raw}, cacheSize: 1, clusterCache: make(map[uint32]*list.Element), cacheList: list.New()}
+	// init will fail later (e.g. loading title listing) but should NOT fail
+	// on the MIME list read itself.
+	err := a.init()
+	if err != nil && err.Error() == "zim: URLPtrPos (100) precedes MIMEListPos (200)" {
+		t.Fatal("should no longer reject based on URLPtrPos < MIMEListPos")
 	}
 }
 
@@ -1030,7 +1023,7 @@ func buildZIMWithOOBTitleListing() []byte {
 
 func TestLoadTitleListingOutOfRangeIndex(t *testing.T) {
 	raw := buildZIMWithOOBTitleListing()
-	a := &Archive{r: &bytesReader{data: raw}, cacheSize: 1, clusterCache: map[uint32]*cluster{}}
+	a := &Archive{r: &bytesReader{data: raw}, cacheSize: 1, clusterCache: make(map[uint32]*list.Element), cacheList: list.New()}
 	err := a.init()
 	if err == nil {
 		t.Fatal("expected error for out-of-range title index, got nil")

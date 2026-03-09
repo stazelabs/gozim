@@ -9,6 +9,9 @@
 <tr><th>ZIM Version</th><td>{{.MajorVersion}}.{{.MinorVersion}}</td></tr>
 <tr><th>Entry Count</th><td>{{.EntryCount}}</td></tr>
 <tr><th>Cluster Count</th><td><a href="/{{.Slug}}/-/info/cluster">{{.ClusterCount}}</a></td></tr>
+{{if .IsSplit}}<tr><th>Split Archive</th><td><span class="badge badge-yes">Yes</span> — {{len .SplitParts}} parts, {{.SplitTotal}} total</td></tr>
+{{range .SplitParts}}<tr><th></th><td class="mono">{{.Filename}} — {{.Size}}</td></tr>
+{{end}}{{end}}
 <tr><th>Has Main Entry</th><td>{{if .HasMainEntry}}<span class="badge badge-yes">Yes</span>{{else}}<span class="badge badge-no">No</span>{{end}}</td></tr>
 {{if and .HasMainEntry .MainPath}}<tr><th>Main Page</th><td><a href="/{{.Slug}}/{{.MainPath}}">{{.MainTitle}}</a></td></tr>{{end}}
 <tr><th>Full-text Index</th><td>{{if .FulltextIndex.Has}}<span class="badge badge-yes">Yes</span>{{if .FulltextIndex.Format}} <span class="mono" style="color:#555">{{.FulltextIndex.Format}}</span>{{end}}{{else}}<span class="badge badge-no">No</span>{{end}}</td></tr>

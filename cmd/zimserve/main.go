@@ -159,7 +159,20 @@ func serve(paths []string, dirs []string, recursive bool, addr string, cacheSize
 	return <-done
 }
 
-// collectZIMPaths scans dirs for .zim files. Non-recursive by default;
+// isZIMFile returns true if the filename is a .zim file or the first part of
+// a split ZIM (.zimaa). Other split parts (.zimab, .zimac, …) return false
+// to avoid duplicate entries — Open() auto-discovers them from the .zimaa.
+func isZIMFile(name string) bool {
+	if strings.HasSuffix(name, ".zim") {
+		return true
+	}
+	if strings.HasSuffix(name, ".zimaa") {
+		return true
+	}
+	return false
+}
+
+// collectZIMPaths scans dirs for .zim and .zimaa files. Non-recursive by default;
 // recursive mode uses filepath.WalkDir and does not follow directory symlinks.
 // Results are deduplicated and sorted for deterministic slug assignment.
 func collectZIMPaths(dirs []string, recursive bool) []string {
@@ -179,7 +192,7 @@ func collectZIMPaths(dirs []string, recursive bool) []string {
 						return filepath.SkipDir
 					}
 				}
-				if !d.IsDir() && strings.HasSuffix(path, ".zim") {
+				if !d.IsDir() && isZIMFile(path) {
 					if abs, err := filepath.Abs(path); err == nil && !seen[abs] {
 						seen[abs] = true
 						paths = append(paths, abs)
@@ -194,7 +207,7 @@ func collectZIMPaths(dirs []string, recursive bool) []string {
 				continue
 			}
 			for _, e := range entries {
-				if !e.IsDir() && strings.HasSuffix(e.Name(), ".zim") {
+				if !e.IsDir() && isZIMFile(e.Name()) {
 					if abs, err := filepath.Abs(filepath.Join(dir, e.Name())); err == nil && !seen[abs] {
 						seen[abs] = true
 						paths = append(paths, abs)
@@ -268,6 +281,7 @@ func loadLibrary(paths []string, hardFailCount int, cacheSize int) (*library, er
 // "wikipedia_en_all_2024-01.zim" -> "wikipedia_en_all"
 func makeSlug(path string) string {
 	name := filepath.Base(path)
+	name = strings.TrimSuffix(name, ".zimaa") // split ZIM first part
 	name = strings.TrimSuffix(name, ".zim")
 	// Strip date suffix (e.g., "_2024-01")
 	parts := strings.Split(name, "_")

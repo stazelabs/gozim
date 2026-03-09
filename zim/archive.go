@@ -1,6 +1,7 @@
 package zim
 
 import (
+	"container/list"
 	"encoding/binary"
 	"fmt"
 	"iter"
@@ -14,9 +15,9 @@ const defaultCacheSize = 16
 // Any cluster claiming to be larger than this in a ZIM file is treated as corrupt.
 const maxClusterSize = 4 << 30 // 4 GiB
 
-// maxMIMEListSize is the upper bound on the MIME type list size (1 MiB).
-// Real MIME lists are a few KB; this cap prevents OOM on malformed files.
-const maxMIMEListSize = 1 << 20 // 1 MiB
+// maxMIMEListSize is the maximum number of bytes read when scanning the
+// MIME type list. Real MIME lists are a few KB; 64 KiB is very generous.
+const maxMIMEListSize = 64 << 10 // 64 KiB
 
 // Archive represents an opened ZIM file.
 type Archive struct {
@@ -29,12 +30,21 @@ type Archive struct {
 	// instead of the header's title pointer table (TitlePtrPos == 0xFFFF...).
 	titleList []uint32
 
+	metadataOnce sync.Once
+	metadataMap  map[string]string // cached M-namespace entries
+
 	clusterMu    sync.Mutex
-	clusterCache map[uint32]*cluster
+	clusterCache map[uint32]*list.Element // cluster number → list element (value is *lruEntry)
 	cacheSize    int
-	cacheOrder   []uint32 // simple LRU tracking
+	cacheList    *list.List // front = most recent, back = least recent
 	cacheHits    int64
 	cacheMisses  int64
+}
+
+// lruEntry is stored as the Value in each list.Element.
+type lruEntry struct {
+	clusterNum uint32
+	cluster    *cluster
 }
 
 // CacheStats holds runtime statistics for the cluster LRU cache.
@@ -51,8 +61,8 @@ func (a *Archive) CacheStats() CacheStats {
 	a.clusterMu.Lock()
 	defer a.clusterMu.Unlock()
 	var bytes int64
-	for _, c := range a.clusterCache {
-		for _, b := range c.blobs {
+	for e := a.cacheList.Front(); e != nil; e = e.Next() {
+		for _, b := range e.Value.(*lruEntry).cluster.blobs { //nolint:forcetypeassert
 			bytes += int64(len(b))
 		}
 	}
@@ -98,15 +108,29 @@ func OpenWithOptions(path string, opts ...Option) (*Archive, error) {
 		opt(&o)
 	}
 
-	r, err := openReader(path, o.useMmap)
-	if err != nil {
-		return nil, fmt.Errorf("zim: open %s: %w", path, err)
+	var r reader
+	if isSplitZIM(path) {
+		parts, err := discoverParts(path)
+		if err != nil {
+			return nil, fmt.Errorf("zim: discover split parts for %s: %w", path, err)
+		}
+		r, err = newMultiReader(parts, o.useMmap)
+		if err != nil {
+			return nil, fmt.Errorf("zim: open split %s: %w", path, err)
+		}
+	} else {
+		var err error
+		r, err = openReader(path, o.useMmap)
+		if err != nil {
+			return nil, fmt.Errorf("zim: open %s: %w", path, err)
+		}
 	}
 
 	a := &Archive{
 		r:            r,
 		cacheSize:    o.cacheSize,
-		clusterCache: make(map[uint32]*cluster),
+		clusterCache: make(map[uint32]*list.Element),
+		cacheList:    list.New(),
 	}
 
 	if err := a.init(); err != nil {
@@ -132,20 +156,13 @@ func (a *Archive) init() error {
 	}
 
 	// Read MIME type list.
-	// Per the ZIM spec the MIME list occupies [MIMEListPos, URLPtrPos).
-	// Use that exact range rather than a hardcoded chunk so we neither
-	// waste memory on tiny files nor truncate an unusually large list.
+	// The MIME list starts at MIMEListPos and is terminated by an empty
+	// null-terminated string (double-null). We read a fixed chunk and let
+	// parseMIMEList find the terminator. Real MIME lists are a few KB;
+	// 64 KiB is more than enough.
 	mimeStart := int64(a.hdr.MIMEListPos)
-	urlPtrStart := int64(a.hdr.URLPtrPos)
-	if urlPtrStart < mimeStart {
-		return fmt.Errorf("zim: URLPtrPos (%d) precedes MIMEListPos (%d)", urlPtrStart, mimeStart)
-	}
-	mimeLen := urlPtrStart - mimeStart
-	// Sanity cap: real MIME lists are a few KB; 1 MiB is extremely generous.
-	if mimeLen > maxMIMEListSize {
-		return fmt.Errorf("zim: MIME list size %d exceeds limit (%d)", mimeLen, maxMIMEListSize)
-	}
-	mimeBuf := make([]byte, mimeLen)
+	mimeReadLen := min(int64(maxMIMEListSize), a.r.Size()-mimeStart)
+	mimeBuf := make([]byte, mimeReadLen)
 	if _, err := a.r.ReadAt(mimeBuf, mimeStart); err != nil {
 		return fmt.Errorf("zim: read MIME list: %w", err)
 	}
@@ -199,9 +216,38 @@ func (a *Archive) loadTitleListing() error {
 func (a *Archive) Close() error {
 	a.clusterMu.Lock()
 	a.clusterCache = nil
-	a.cacheOrder = nil
+	a.cacheList = nil
 	a.clusterMu.Unlock()
 	return a.r.Close()
+}
+
+// SplitPart describes one file in a split ZIM archive.
+type SplitPart struct {
+	Path string // absolute file path
+	Size int64  // size in bytes
+}
+
+// IsSplit reports whether this archive was opened from split ZIM files.
+func (a *Archive) IsSplit() bool {
+	_, ok := a.r.(*multiReader)
+	return ok
+}
+
+// SplitParts returns information about each part file if the archive was
+// opened from split ZIM files. Returns nil for non-split archives.
+func (a *Archive) SplitParts() []SplitPart {
+	mr, ok := a.r.(*multiReader)
+	if !ok {
+		return nil
+	}
+	result := make([]SplitPart, len(mr.parts))
+	for i, r := range mr.parts {
+		result[i] = SplitPart{
+			Path: mr.paths[i],
+			Size: r.Size(),
+		}
+	}
+	return result
 }
 
 // UUID returns the archive's unique identifier.
@@ -401,17 +447,27 @@ func (a *Archive) AllEntriesByTitle() iter.Seq2[Entry, error] {
 }
 
 // Metadata returns the value of a metadata entry (M namespace) by key.
-// Returns ErrNotFound if the key doesn't exist.
+// Results are cached after the first call; subsequent calls for any key
+// are served from the cache. Returns ErrNotFound if the key doesn't exist.
 func (a *Archive) Metadata(key string) (string, error) {
-	entry, err := a.EntryByPath("M/" + key)
-	if err != nil {
-		return "", err
+	a.metadataOnce.Do(a.loadMetadata)
+	v, ok := a.metadataMap[key]
+	if !ok {
+		return "", ErrNotFound
 	}
-	data, err := entry.ReadContent()
-	if err != nil {
-		return "", err
+	return v, nil
+}
+
+// loadMetadata populates the metadata cache by reading all M-namespace entries.
+func (a *Archive) loadMetadata() {
+	a.metadataMap = make(map[string]string)
+	for e := range a.EntriesByNamespace('M') {
+		data, err := e.ReadContent()
+		if err != nil {
+			continue
+		}
+		a.metadataMap[e.Path()] = string(data)
 	}
-	return string(data), nil
 }
 
 // namespaceBounds returns the [lo, hi) index range in the URL pointer list
@@ -653,17 +709,11 @@ func (a *Archive) readCluster(clusterNum uint32) (*cluster, error) {
 	a.clusterMu.Lock()
 	defer a.clusterMu.Unlock()
 
-	// Check cache and promote to back (most-recently-used)
-	if c, ok := a.clusterCache[clusterNum]; ok {
+	// Check cache and promote to front (most-recently-used)
+	if elem, ok := a.clusterCache[clusterNum]; ok {
 		a.cacheHits++
-		for i, v := range a.cacheOrder {
-			if v == clusterNum {
-				a.cacheOrder = append(a.cacheOrder[:i], a.cacheOrder[i+1:]...)
-				a.cacheOrder = append(a.cacheOrder, clusterNum)
-				break
-			}
-		}
-		return c, nil
+		a.cacheList.MoveToFront(elem)
+		return elem.Value.(*lruEntry).cluster, nil //nolint:forcetypeassert
 	}
 	a.cacheMisses++
 
@@ -710,13 +760,13 @@ func (a *Archive) readCluster(clusterNum uint32) (*cluster, error) {
 
 	// Cache with LRU eviction
 	if a.clusterCache != nil {
-		if len(a.cacheOrder) >= a.cacheSize {
-			evict := a.cacheOrder[0]
-			a.cacheOrder = a.cacheOrder[1:]
-			delete(a.clusterCache, evict)
+		if a.cacheList.Len() >= a.cacheSize {
+			back := a.cacheList.Back()
+			delete(a.clusterCache, back.Value.(*lruEntry).clusterNum) //nolint:forcetypeassert
+			a.cacheList.Remove(back)
 		}
-		a.clusterCache[clusterNum] = c
-		a.cacheOrder = append(a.cacheOrder, clusterNum)
+		elem := a.cacheList.PushFront(&lruEntry{clusterNum: clusterNum, cluster: c})
+		a.clusterCache[clusterNum] = elem
 	}
 
 	return c, nil
