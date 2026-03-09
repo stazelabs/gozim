@@ -3,6 +3,7 @@
 [![CI](https://github.com/stazelabs/gozim/actions/workflows/ci.yml/badge.svg)](https://github.com/stazelabs/gozim/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/stazelabs/gozim/branch/main/graph/badge.svg)](https://codecov.io/gh/stazelabs/gozim)
 [![Go Reference](https://pkg.go.dev/badge/github.com/stazelabs/gozim/zim.svg)](https://pkg.go.dev/github.com/stazelabs/gozim/zim)
+[![Go Report Card](https://goreportcard.com/badge/github.com/stazelabs/gozim)](https://goreportcard.com/report/github.com/stazelabs/gozim)
 [![Latest Release](https://img.shields.io/github/v/release/stazelabs/gozim)](https://github.com/stazelabs/gozim/releases)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/stazelabs/gozim)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -184,6 +185,10 @@ entry.Item() (Item, error)           // content access
 zim.WithMmap(false)     // disable memory mapping
 zim.WithCacheSize(32)   // cluster cache size (default: 16)
 ```
+
+## Platform Notes
+
+**32-bit systems:** On 32-bit platforms (where Go's `int` is 32 bits), memory-mapped I/O is automatically disabled and gozim falls back to `pread`. ZIM files larger than 2 GB are not supported on 32-bit systems because internal offsets exceed the 32-bit address space. All 64-bit platforms (amd64, arm64) are fully supported with no size restrictions.
 
 ## Development
 
