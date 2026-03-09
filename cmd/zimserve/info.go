@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -180,7 +181,7 @@ func parseOffsetLimit(r *http.Request) (int, int) {
 	offset := 0
 	limit := 100
 	if s := r.URL.Query().Get("offset"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+		if n, err := strconv.Atoi(s); err == nil && n >= 0 && n <= math.MaxUint32 {
 			offset = n
 		}
 	}
