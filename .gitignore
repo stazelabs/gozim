@@ -9,6 +9,9 @@
 /zimverify
 /*.test
 
+# Coverage output
+coverage.out
+
 # Test data (large ZIM files)
 testdata/*.zim
 !testdata/small.zim

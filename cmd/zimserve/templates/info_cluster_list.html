@@ -1,0 +1,20 @@
+{{define "title"}}Clusters — {{.Title}}{{end}}
+{{define "body"}}
+<h1><a href="/">📚 Library</a></h1><h2>Clusters — <a href="/{{.Slug}}/-/info">{{.Title}}</a></h2>
+<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/{{.Slug}}/-/info">Info</a></div>
+<p class="count">{{.Total}} clusters total</p>
+<table><tr><th style="width:60px">#</th><th>Offset</th><th style="text-align:right">Compressed Size</th><th>Compression</th><th>Extended</th></tr>
+{{range .Rows}}
+{{if .HasError}}
+<tr><td class="num"><a href="/{{$.Slug}}/-/info/cluster?n={{.Num}}">{{.Num}}</a></td><td colspan="4" style="color:#cf222e">{{.ErrMsg}}</td></tr>
+{{else}}
+<tr><td class="num"><a href="/{{$.Slug}}/-/info/cluster?n={{.Num}}">{{.Num}}</a></td><td class="mono">0x{{printf "%X" .Offset}}</td><td class="num">{{.Size}}</td><td class="mono">{{.Comp}}</td><td>{{if .Extended}}yes{{end}}</td></tr>
+{{end}}
+{{end}}
+</table>
+<div class="pager">
+{{if .HasPrev}}<a href="/{{.Slug}}/-/info/cluster?offset={{.PrevOffset}}&limit={{.Limit}}">Previous</a>{{end}}
+{{if .HasNext}}<a href="/{{.Slug}}/-/info/cluster?offset={{.NextOffset}}&limit={{.Limit}}">Next</a>{{end}}
+</div>
+<div class="nav"><a href="/{{.Slug}}/-/info">Back to info</a></div>
+{{end}}

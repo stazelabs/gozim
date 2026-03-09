@@ -13,19 +13,19 @@ const (
 )
 
 type header struct {
-	Magic            uint32
-	MajorVersion     uint16
-	MinorVersion     uint16
-	UUID             [16]byte
-	EntryCount       uint32
-	ClusterCount     uint32
-	URLPtrPos        uint64
-	TitlePtrPos      uint64
-	ClusterPtrPos    uint64
-	MIMEListPos      uint64
-	MainPage         uint32
-	LayoutPage       uint32
-	ChecksumPos      uint64
+	Magic         uint32
+	MajorVersion  uint16
+	MinorVersion  uint16
+	UUID          [16]byte
+	EntryCount    uint32
+	ClusterCount  uint32
+	URLPtrPos     uint64
+	TitlePtrPos   uint64
+	ClusterPtrPos uint64
+	MIMEListPos   uint64
+	MainPage      uint32
+	LayoutPage    uint32
+	ChecksumPos   uint64
 }
 
 func parseHeader(data []byte) (header, error) {

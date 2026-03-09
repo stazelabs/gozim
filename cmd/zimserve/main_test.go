@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -289,12 +290,7 @@ func TestSearchPrefixes(t *testing.T) {
 	prefixes := searchPrefixes("test")
 	// Should include original, Title case, and lowercase
 	has := func(s string) bool {
-		for _, p := range prefixes {
-			if p == s {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(prefixes, s)
 	}
 	if !has("test") {
 		t.Error("missing original prefix 'test'")
@@ -307,12 +303,7 @@ func TestSearchPrefixes(t *testing.T) {
 func TestSearchPrefixesUnicode(t *testing.T) {
 	prefixes := searchPrefixes("über")
 	has := func(s string) bool {
-		for _, p := range prefixes {
-			if p == s {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(prefixes, s)
 	}
 	if !has("über") {
 		t.Error("missing original 'über'")
@@ -734,8 +725,8 @@ func TestMakeSlugEdgeCases(t *testing.T) {
 		// Only strips trailing parts that are >= 4 chars and start with digit
 		{"wiki_2024-01-15.zim", "wiki"},
 		{"all_dates_2024_01_15.zim", "all_dates_2024_01_15"}, // "15" is only 2 chars
-		{"a_1.zim", "a_1"},                                    // "1" is only 1 char
-		{"just_numbers_1234.zim", "just_numbers"},              // "1234" is 4 chars
+		{"a_1.zim", "a_1"},                                   // "1" is only 1 char
+		{"just_numbers_1234.zim", "just_numbers"},            // "1234" is 4 chars
 	}
 	for _, tt := range tests {
 		got := makeSlug(tt.path)

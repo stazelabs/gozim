@@ -1,0 +1,44 @@
+{{define "title"}}Info — {{.Title}}{{end}}
+{{define "body"}}
+<style>th { width: 200px; white-space: nowrap; } td { word-break: break-all; }</style>
+<h1><a href="/">📚 Library</a></h1><h2>Info — <a href="/{{.Slug}}/">{{.Title}}</a></h2>
+<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a></div>
+<h2>Format</h2><table>
+<tr><th>Filename</th><td>{{.Filename}}</td></tr>
+<tr><th>UUID</th><td class="mono">{{.UUID}}</td></tr>
+<tr><th>ZIM Version</th><td>{{.MajorVersion}}.{{.MinorVersion}}</td></tr>
+<tr><th>Entry Count</th><td>{{.EntryCount}}</td></tr>
+<tr><th>Cluster Count</th><td><a href="/{{.Slug}}/-/info/cluster">{{.ClusterCount}}</a></td></tr>
+<tr><th>Has Main Entry</th><td>{{if .HasMainEntry}}<span class="badge badge-yes">Yes</span>{{else}}<span class="badge badge-no">No</span>{{end}}</td></tr>
+{{if and .HasMainEntry .MainPath}}<tr><th>Main Page</th><td><a href="/{{.Slug}}/{{.MainPath}}">{{.MainTitle}}</a></td></tr>{{end}}
+<tr><th>Full-text Index</th><td>{{if .FulltextIndex.Has}}<span class="badge badge-yes">Yes</span>{{if .FulltextIndex.Format}} <span class="mono" style="color:#555">{{.FulltextIndex.Format}}</span>{{end}}{{else}}<span class="badge badge-no">No</span>{{end}}</td></tr>
+<tr><th>Title Index</th><td>{{if .TitleIndex.Has}}<span class="badge badge-yes">Yes</span>{{if .TitleIndex.Format}} <span class="mono" style="color:#555">{{.TitleIndex.Format}}</span>{{end}}{{else}}<span class="badge badge-no">No</span>{{end}}</td></tr>
+</table>
+<h2>Memory</h2><table>
+<tr><th>Cluster Cache</th><td>{{.Cache.Size}} / {{.Cache.Capacity}} slots used &nbsp;·&nbsp; {{.Cache.Bytes}} held</td></tr>
+<tr><th>Cache Hit Rate</th><td>{{.Cache.HitRate}} ({{.Cache.Hits}} hits, {{.Cache.Misses}} misses)</td></tr>
+</table>
+{{if .Metadata}}
+<h2>Metadata</h2><table>
+{{range .Metadata}}<tr><th>{{.Key}}</th><td>{{if .Long}}<div style="max-height:100px;overflow-y:auto">{{.Value}}</div>{{else}}{{.Value}}{{end}}</td></tr>{{end}}
+</table>
+{{end}}
+<h2>Namespaces</h2>
+<table><tr><th>Namespace</th><th>Description</th><th style="text-align:right">Entries</th></tr>
+{{range .Namespaces}}<tr><td class="mono">{{.NS}}</td><td>{{.Desc}}</td><td class="num"><a href="/{{$.Slug}}/-/info/ns?ns={{.NS}}">{{.Count}}</a></td></tr>{{end}}
+</table>
+{{if .MIMECounts}}
+<h2>Content Types (C namespace)</h2>
+<table><tr><th>MIME Type</th><th style="text-align:right">Count</th></tr>
+{{range .MIMECounts}}<tr><td class="mono">{{.MIME}}</td><td class="num"><a href="/{{$.Slug}}/-/info/mime?type={{.MIME}}">{{.Count}}</a></td></tr>{{end}}
+{{if .RedirectCount}}<tr><td><em>Redirects</em></td><td class="num"><a href="/{{.Slug}}/-/info/mime?type=redirect">{{.RedirectCount}}</a></td></tr>{{end}}
+</table>
+{{end}}
+{{if .MIMETypes}}
+<h2>Registered MIME Types</h2>
+<table><tr><th style="width:60px">Index</th><th>MIME Type</th></tr>
+{{range .MIMETypes}}<tr><td>{{.Index}}</td><td class="mono"><a href="/{{$.Slug}}/-/info/ns?ns=C&type={{.MIME}}">{{.MIME}}</a></td></tr>{{end}}
+</table>
+{{end}}
+<div class="nav"><a href="/">Library</a> · <a href="/{{.Slug}}/">Main page</a> · <a href="/{{.Slug}}/-/search">Search</a> · <a href="/{{.Slug}}/-/browse">Browse</a></div>
+{{end}}

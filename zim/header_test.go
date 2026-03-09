@@ -11,8 +11,8 @@ func makeValidHeader() []byte {
 	le := binary.LittleEndian
 
 	le.PutUint32(buf[0:4], zimMagic)
-	le.PutUint16(buf[4:6], 6)  // major version
-	le.PutUint16(buf[6:8], 1)  // minor version
+	le.PutUint16(buf[4:6], 6) // major version
+	le.PutUint16(buf[6:8], 1) // minor version
 	// UUID at 8:24 left as zeros
 	le.PutUint32(buf[24:28], 100)        // entry count
 	le.PutUint32(buf[28:32], 10)         // cluster count

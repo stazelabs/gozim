@@ -18,10 +18,13 @@ const (
 	compZstd = 5
 )
 
+// maxDecompressedSize caps decompressed cluster output to prevent decompression bombs.
+const maxDecompressedSize = 1 << 30 // 1 GiB
+
 // zstdPool reuses zstd decoders across decompressions.
 var zstdPool = sync.Pool{
 	New: func() any {
-		d, _ := zstd.NewReader(nil)
+		d, _ := zstd.NewReader(nil, zstd.WithDecoderMaxMemory(maxDecompressedSize))
 		return d
 	},
 }
@@ -46,15 +49,22 @@ func decompressXZ(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("zim: xz decompression failed: %w", err)
 	}
-	out, err := io.ReadAll(r)
+	// Read one byte beyond the limit so we can detect bombs.
+	out, err := io.ReadAll(io.LimitReader(r, maxDecompressedSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("zim: xz decompression failed: %w", err)
+	}
+	if int64(len(out)) > maxDecompressedSize {
+		return nil, fmt.Errorf("zim: xz decompressed size exceeds limit (%d bytes)", maxDecompressedSize)
 	}
 	return out, nil
 }
 
 func decompressZstd(data []byte) ([]byte, error) {
-	dec := zstdPool.Get().(*zstd.Decoder)
+	dec, ok := zstdPool.Get().(*zstd.Decoder)
+	if !ok {
+		panic("zim: zstdPool returned unexpected type")
+	}
 	defer zstdPool.Put(dec)
 
 	out, err := dec.DecodeAll(data, nil)

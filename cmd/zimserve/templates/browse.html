@@ -1,0 +1,24 @@
+{{define "title"}}Browse — {{.Title}}{{end}}
+{{define "body"}}
+<h1><a href="/">📚 Library</a></h1><h2>Browse — <a href="/{{.Slug}}/">{{.Title}}</a></h2>
+<p class="total">{{commaInt .TotalC}} articles total</p>
+<div class="letters">
+{{range .Letters}}{{if .Empty}}<span>{{.L}}</span>{{else if .Active}}<a href="/{{$.Slug}}/-/browse?letter={{.L}}" class="active">{{.L}}</a>{{else}}<a href="/{{$.Slug}}/-/browse?letter={{.L}}">{{.L}}</a>{{end}}{{end}}
+<a href="/{{.Slug}}/-/browse?letter=%23"{{if .HashActive}} class="active"{{end}}>#</a>
+</div>
+{{if .HasLetter}}
+<p class="letter-info">{{commaInt .LetterCount}} articles</p>
+<div class="entries">
+{{if .NoEntries}}<p style="color:#666;font-style:italic">No entries.</p>
+{{else}}{{range .Entries}}<a href="{{.Path}}">{{.Title}}</a>{{end}}{{end}}
+</div>
+{{if gt .LetterCount 0}}
+<div class="pager">
+{{if .HasPrev}}<a href="/{{$.Slug}}/-/browse?letter={{$.Letter}}&offset={{.PrevOffset}}&limit={{.Limit}}">← Previous</a>{{end}}
+<span>{{commaInt .PageStart}}–{{commaInt .PageEnd}} of {{commaInt .LetterCount}}</span>
+{{if .HasNext}}<a href="/{{$.Slug}}/-/browse?letter={{$.Letter}}&offset={{.NextOffset}}&limit={{.Limit}}">Next →</a>{{end}}
+</div>
+{{end}}
+{{end}}
+<div class="nav"><a href="/">Library</a> · <a href="/{{.Slug}}/">Back to main page</a> · <a href="/{{.Slug}}/-/search">Search</a> · <a href="/{{.Slug}}/-/random">Random article</a></div>
+{{end}}

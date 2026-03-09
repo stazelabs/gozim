@@ -236,7 +236,7 @@ func TestResolveDeepRedirectChain(t *testing.T) {
 	// 10-entry redirect chain: 0->1->2->...->9 (content)
 	n := 10
 	entries := make([][]byte, n)
-	for i := 0; i < n-1; i++ {
+	for i := range n - 1 {
 		entries[i] = makeRedirectEntry('C', uint32(i+1), fmt.Sprintf("Redirect%d", i), "")
 	}
 	entries[n-1] = makeContentEntry(0, 'C', 0, 0, "FinalPage", "Final")

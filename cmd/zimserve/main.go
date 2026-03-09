@@ -62,9 +62,10 @@ ZIM files may be specified as positional arguments, via --dir, or both.`,
 }
 
 type library struct {
-	archives map[string]*zimEntry // slug -> entry
-	slugs    []string             // ordered list of slugs
-	noInfo   bool                 // hide info pages and icon
+	archives  map[string]*zimEntry // slug -> entry
+	slugs     []string             // ordered list of slugs
+	noInfo    bool                 // hide info pages and icon
+	startTime time.Time
 }
 
 type zimEntry struct {
@@ -88,6 +89,7 @@ func serve(paths []string, dirs []string, recursive bool, addr string, cacheSize
 		return err
 	}
 	lib.noInfo = noInfo
+	lib.startTime = time.Now()
 	defer func() {
 		for _, entry := range lib.archives {
 			entry.archive.Close()
@@ -104,6 +106,7 @@ func serve(paths []string, dirs []string, recursive bool, addr string, cacheSize
 	mux.HandleFunc("/favicon.ico", handleFaviconSVG)
 	mux.HandleFunc("/_favicon.svg", handleFaviconSVG)
 	mux.HandleFunc("/_docs", handleDocs)
+	mux.HandleFunc("/_info", lib.handleServerInfo)
 	mux.HandleFunc("/_random", lib.handleRandomAll)
 	mux.HandleFunc("/_search", lib.handleSearchAll)
 	mux.HandleFunc("/{slug}/_search", lib.handleSearchJSON)
@@ -119,9 +122,19 @@ func serve(paths []string, dirs []string, recursive bool, addr string, cacheSize
 	}
 	mux.HandleFunc("/{slug}/{path...}", lib.handleContent)
 
+	// Serve /_static/ outside the mux to avoid wildcard conflicts with /{slug}/_search.
+	staticHandler := http.StripPrefix("/_static/", http.FileServerFS(staticFS))
+	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/_static/") {
+			staticHandler.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      securityHeaders(methodCheck(mux)),
+		Handler:      securityHeaders(methodCheck(root)),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -280,9 +293,6 @@ func makeETag(ze *zimEntry, entryPath string) string {
 // faviconSVG is the SVG content served at /_favicon.svg.
 const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">📚</text></svg>`
 
-// faviconLink is the HTML link tag referencing the favicon by URL.
-const faviconLink = `<link rel="icon" type="image/svg+xml" href="/_favicon.svg">`
-
 func handleFaviconSVG(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
@@ -305,7 +315,7 @@ func methodCheck(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeErrorPage(w, http.StatusMethodNotAllowed, "Method not allowed", "Only GET and HEAD requests are supported.")
 			return
 		}
 		next.ServeHTTP(w, r)

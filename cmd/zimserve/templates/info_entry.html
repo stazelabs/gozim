@@ -1,0 +1,27 @@
+{{define "title"}}Entry {{.EntryIdx}} — {{.ArchiveTitle}}{{end}}
+{{define "body"}}
+<style>th { width: 160px; }</style>
+<h1><a href="/">📚 Library</a></h1><h2>Entry #{{.EntryIdx}} — <a href="/{{.Slug}}/-/info">{{.ArchiveTitle}}</a></h2>
+<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/{{.Slug}}/-/info">Info</a></div>
+<table>
+<tr><th>Index</th><td class="num">{{.EntryIdx}}</td></tr>
+<tr><th>Full Path</th><td class="mono">{{.FullPath}}</td></tr>
+<tr><th>Namespace</th><td class="mono">{{.NS}}</td></tr>
+<tr><th>Path</th><td class="mono">{{.Path}}</td></tr>
+<tr><th>Title</th><td>{{.EntryTitle}}</td></tr>
+<tr><th>Is Redirect</th><td>{{.IsRedirect}}</td></tr>
+{{if .IsRedirect}}
+{{if .RedirectTarget}}<tr><th>Redirect Target</th><td><a href="/{{.Slug}}/-/info/entry?idx={{.RedirectTarget.Index}}">{{.RedirectTarget.FullPath}}</a> (index {{.RedirectTarget.Index}})</td></tr>{{end}}
+{{if .ResolvesTo}}<tr><th>Resolves To</th><td><a href="/{{.Slug}}/-/info/entry?idx={{.ResolvesTo.Index}}">{{.ResolvesTo.FullPath}}</a> (index {{.ResolvesTo.Index}})</td></tr>{{end}}
+{{else}}
+{{if .MIME}}<tr><th>MIME Type</th><td class="mono">{{.MIME}}</td></tr>{{end}}
+{{if .HasSize}}<tr><th>Content Size</th><td class="num">{{.ContentSize}}</td></tr>{{end}}
+{{end}}
+</table>
+<div style="margin-top:16px">{{if .ViewLink}}<a href="{{.ViewLink}}">View content{{if .IsRedirect}} (follows redirect){{end}}</a>{{end}}</div>
+<div class="pager">
+{{if .HasPrev}}<a href="/{{.Slug}}/-/info/entry?idx={{.PrevIdx}}">Previous entry (#{{.PrevIdx}})</a>{{end}}
+{{if .HasNext}}<a href="/{{.Slug}}/-/info/entry?idx={{.NextIdx}}">Next entry (#{{.NextIdx}})</a>{{end}}
+</div>
+<div class="nav"><a href="/{{.Slug}}/-/info">Back to info</a> · <a href="/{{.Slug}}/-/info/ns?ns={{.NS}}">Namespace {{.NS}}</a></div>
+{{end}}

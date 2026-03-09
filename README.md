@@ -1,5 +1,12 @@
 # gozim
 
+[![CI](https://github.com/stazelabs/gozim/actions/workflows/ci.yml/badge.svg)](https://github.com/stazelabs/gozim/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/stazelabs/gozim/branch/main/graph/badge.svg)](https://codecov.io/gh/stazelabs/gozim)
+[![Go Reference](https://pkg.go.dev/badge/github.com/stazelabs/gozim/zim.svg)](https://pkg.go.dev/github.com/stazelabs/gozim/zim)
+[![Latest Release](https://img.shields.io/github/v/release/stazelabs/gozim)](https://github.com/stazelabs/gozim/releases)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/stazelabs/gozim)](go.mod)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 A native Go library for reading [ZIM files](https://wiki.openzim.org/wiki/ZIM_file_format) — the open archive format used by [Kiwix](https://kiwix.org) for offline access to Wikipedia and other web content.
 
 Pure Go. No CGo dependencies. Supports ZIM format versions 5 and 6.

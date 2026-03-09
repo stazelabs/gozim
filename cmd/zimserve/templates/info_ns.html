@@ -1,0 +1,31 @@
+{{define "title"}}Namespace {{.NS}} — {{.Title}}{{end}}
+{{define "body"}}
+<h1><a href="/">📚 Library</a></h1><h2>Namespace <code>{{.NS}}</code> — <a href="/{{.Slug}}/-/info">{{.Title}}</a></h2>
+<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/{{.Slug}}/-/info">Info</a></div>
+<form class="filter-bar" method="get" action="">
+<input type="hidden" name="ns" value="{{.NS}}">
+<label for="type-select">Type:</label>
+<select id="type-select" name="type">
+<option value=""{{if eq .TypeFilter ""}} selected{{end}}>All</option>
+<option value="redirect"{{if eq .TypeFilter "redirect"}} selected{{end}}>redirect</option>
+{{range .MIMETypes}}<option value="{{.}}"{{if eq $.TypeFilter .}} selected{{end}}>{{.}}</option>{{end}}
+</select>
+<button type="submit">Filter</button>
+{{if .TypeFilter}}<a href="/{{.Slug}}/-/info/ns?ns={{.NS}}">Clear</a>{{end}}
+</form>
+<p class="count">{{.Total}} entries{{if .TypeFilter}} matching <span class="filter-active">{{.TypeFilter}}</span>{{end}}</p>
+<table><tr><th style="width:50%">Path</th><th>Title</th><th>Type</th></tr>
+{{range .Rows}}
+<tr>
+<td class="mono">{{if .IsContent}}<a href="/{{$.Slug}}/{{.Path}}">{{.Path}}</a> <a href="/{{$.Slug}}/-/info/entry?idx={{.Index}}" style="font-size:0.8em;color:#888" title="Entry details">ⓘ</a>{{else}}<a href="/{{$.Slug}}/-/info/entry?idx={{.Index}}">{{.FullPath}}</a>{{end}}</td>
+<td>{{.Title}}</td>
+<td>{{if .IsRedirect}}<span class="badge badge-redirect">redirect</span>{{else if .MIME}}<span class="badge badge-mime">{{.MIME}}</span>{{end}}</td>
+</tr>
+{{end}}
+</table>
+<div class="pager">
+{{if .HasPrev}}<a href="/{{.Slug}}/-/info/ns?ns={{.NS}}{{if .TypeFilter}}&type={{.TypeFilter}}{{end}}&offset={{.PrevOffset}}&limit={{.Limit}}">Previous</a>{{end}}
+{{if .HasNext}}<a href="/{{.Slug}}/-/info/ns?ns={{.NS}}{{if .TypeFilter}}&type={{.TypeFilter}}{{end}}&offset={{.NextOffset}}&limit={{.Limit}}">Next</a>{{end}}
+</div>
+<div class="nav"><a href="/{{.Slug}}/-/info">Back to info</a></div>
+{{end}}

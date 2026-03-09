@@ -1,0 +1,90 @@
+{{define "title"}}Server Info{{end}}
+{{define "body"}}
+<h1><a href="/">📚 Library</a></h1><h2>Server Info</h2>
+
+<h2>Process</h2><table>
+<tr><th>Uptime</th><td>{{.Uptime}}</td></tr>
+<tr><th>Started</th><td>{{.Started}}</td></tr>
+<tr><th>Go Version</th><td class="mono">{{.GoVersion}}</td></tr>
+<tr><th>OS / Arch</th><td class="mono">{{.GOOS}}/{{.GOARCH}}</td></tr>
+<tr><th>Goroutines</th><td>{{.Goroutines}}</td></tr>
+<tr><th>Go Heap In Use</th><td>{{.HeapInuse}}</td></tr>
+<tr><th>Go Heap Idle</th><td>{{.HeapIdle}}</td></tr>
+<tr><th>Go Sys</th><td>{{.Sys}}</td></tr>
+<tr><th>GC Cycles</th><td>{{.NumGC}}</td></tr>
+</table>
+
+<h2>ZIM Files</h2>
+<div style="overflow-x:auto">
+<table id="zim-tbl">
+<thead><tr>
+<th data-col="0">Title<span class="arrow"></span></th>
+<th class="num" data-col="1">Entries<span class="arrow"></span></th>
+<th class="num" data-col="2">Cache Slots<span class="arrow"></span></th>
+<th class="num" data-col="3">Hit Rate<span class="arrow"></span></th>
+<th class="num" data-col="4">Cached<span class="arrow"></span></th>
+</tr></thead>
+<tbody>
+{{range .ZIMs}}<tr>
+<td data-val="{{.Title}}"><a href="/{{.Slug}}/">{{.Title}}</a>{{if not $.NoInfo}} <a href="/{{.Slug}}/-/info" title="ZIM info" style="color:#aaa;font-size:0.85em;text-decoration:none">ⓘ</a>{{end}}</td>
+<td class="num" data-val="{{.EntryCount}}">{{commaInt .EntryCount}}</td>
+<td class="num mono" data-val="{{.CacheNow}}" style="font-size:0.9em">{{.CacheStr}}</td>
+<td class="num" data-val="{{.CacheVal}}" style="font-size:0.9em">{{.CacheHitRate}}</td>
+<td class="num" data-val="{{.CacheBytesRaw}}" style="font-size:0.9em">{{.CacheBytes}}</td>
+</tr>{{end}}
+</tbody>
+<tfoot><tr style="font-weight:600;border-top:2px solid #ccc">
+<td>Total ({{.ZIMCount}} ZIMs)</td>
+<td class="num">{{commaInt .TotEntries}}</td>
+<td class="num">{{.TotCacheNow}}/{{.TotCacheCap}}</td>
+<td class="num" style="font-size:0.9em">{{.TotHitRate}}</td>
+<td class="num" style="font-size:0.9em">{{.TotCacheBytes}}</td>
+</tr></tfoot>
+</table>
+</div>
+<script>
+(function(){
+  var col = 0, asc = true;
+  var tbl = document.getElementById('zim-tbl');
+  var ths = tbl.querySelectorAll('thead th[data-col]');
+  var tbody = tbl.querySelector('tbody');
+  var numCols = {1:1,2:1,3:1,4:1};
+  function sort(c, a) {
+    col = c; asc = a;
+    ths.forEach(function(th, i) {
+      var arrow = th.querySelector('.arrow');
+      arrow.textContent = i === c ? (a ? ' \u25b2' : ' \u25bc') : '';
+      th.classList.toggle('sorted', i === c);
+    });
+    var rows = Array.from(tbody.rows);
+    rows.sort(function(ra, rb) {
+      var av = ra.cells[c].dataset.val;
+      var bv = rb.cells[c].dataset.val;
+      var cmp = numCols[c] ? +av - +bv : av.toLowerCase().localeCompare(bv.toLowerCase());
+      return a ? cmp : -cmp;
+    });
+    rows.forEach(function(r){ tbody.appendChild(r); });
+  }
+  ths.forEach(function(th, i){
+    th.addEventListener('click', function(){ sort(i, col === i ? !asc : true); });
+  });
+  sort(0, true);
+})();
+</script>
+
+{{if .BuildInfo}}
+<h2>Build</h2><table>
+{{range .BuildRows}}<tr><th>{{.Label}}</th><td class="mono" style="font-size:0.85em;word-break:break-all">{{.Value}}</td></tr>{{end}}
+</table>
+{{end}}
+
+{{if .Deps}}
+<h2>Dependencies</h2>
+<table>
+<tr><th style="width:auto">Module</th><th style="width:160px">Version</th><th style="width:auto">Replace</th></tr>
+{{range .Deps}}<tr><td class="mono" style="word-break:break-all">{{.Path}}</td><td class="mono">{{.Version}}</td><td class="mono" style="font-size:0.85em;color:#666">{{.Replace}}</td></tr>{{end}}
+</table>
+{{end}}
+
+<div class="nav"><a href="/">Library</a></div>
+{{end}}

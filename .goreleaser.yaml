@@ -1,0 +1,73 @@
+version: 2
+
+project_name: gozim
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: zimcat
+    main: ./cmd/zimcat
+    binary: zimcat
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+  - id: ziminfo
+    main: ./cmd/ziminfo
+    binary: ziminfo
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+  - id: zimsearch
+    main: ./cmd/zimsearch
+    binary: zimsearch
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+  - id: zimserve
+    main: ./cmd/zimserve
+    binary: zimserve
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+  - id: zimverify
+    main: ./cmd/zimverify
+    binary: zimverify
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^fix'
+      order: 1
+    - title: Other
+      order: 999
+
+release:
+  prerelease: auto

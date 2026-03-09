@@ -1,0 +1,17 @@
+{{define "title"}}Search — {{.Title}}{{end}}
+{{define "body"}}
+<h1><a href="/">📚 Library</a></h1><h2>Search — <a href="/{{.Slug}}/">{{.Title}}</a></h2>
+<form class="search-form" method="get">
+<input type="text" name="q" value="{{.Query}}" placeholder="Search articles..." autofocus>
+<button type="submit">Search</button>
+</form>
+{{if .HasQuery}}
+{{if .Results}}
+<p>{{len .Results}} result(s):</p>
+<div class="results">{{range .Results}}<a href="{{.Path}}">{{.Title}}</a>{{end}}</div>
+{{else}}
+<p class="empty">No results found.</p>
+{{end}}
+{{end}}
+<div class="nav"><a href="/">Library</a> · <a href="/{{.Slug}}/">Back to main page</a> · <a href="/{{.Slug}}/-/browse">Browse</a> · <a href="/{{.Slug}}/-/random">Random article</a></div>
+{{end}}

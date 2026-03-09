@@ -74,7 +74,7 @@ func extractBlobs(data []byte, extended bool) (*cluster, error) {
 
 	// Read all offsets
 	offsets := make([]uint64, numOffsets)
-	for i := 0; i < numOffsets; i++ {
+	for i := range numOffsets {
 		pos := i * offsetSize
 		if pos+offsetSize > len(data) {
 			return nil, fmt.Errorf("zim: offset list extends beyond cluster data")
@@ -88,7 +88,7 @@ func extractBlobs(data []byte, extended bool) (*cluster, error) {
 
 	// Extract blobs using offset pairs
 	blobs := make([][]byte, numBlobs)
-	for i := 0; i < numBlobs; i++ {
+	for i := range numBlobs {
 		start := offsets[i]
 		end := offsets[i+1]
 		if start > end || end > uint64(len(data)) {

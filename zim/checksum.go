@@ -2,6 +2,7 @@ package zim
 
 import (
 	"crypto/md5"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -34,7 +35,7 @@ func (a *Archive) Verify() error {
 			h.Write(buf[:nr])
 		}
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return fmt.Errorf("zim: read for checksum: %w", err)

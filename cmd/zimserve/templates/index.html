@@ -1,0 +1,33 @@
+{{define "title"}}Library{{end}}
+{{define "head-extra"}}<script src="/_static/index.js" defer></script>{{end}}
+{{define "body"}}
+<h1>📚 Library</h1>
+<div class="search-wrap">
+<div class="search-box">
+<input type="text" id="search-input" placeholder="Search articles..." autocomplete="off">
+<select id="search-zim"{{if .SingleZIM}} style="display:none"{{end}}>
+{{if not .SingleZIM}}<option value="_all">All</option>{{end}}
+{{range .Entries}}<option value="{{.Slug}}">{{.Title}}</option>{{end}}
+</select>
+<button type="button" id="random-btn" title="Random article">Random</button>
+</div>
+<div id="search-results"></div>
+</div>
+<table class="index-table"><colgroup><col class="title"><col><col class="date"><col class="entries"></colgroup>
+<thead><tr>
+<th data-col="0">Title<span class="arrow"></span></th>
+<th data-col="1">File<span class="arrow"></span></th>
+<th data-col="2">Date<span class="arrow"></span></th>
+<th data-col="3" class="num">Entries<span class="arrow"></span></th>
+{{if not .NoInfo}}<th style="width:40px"></th>{{end}}
+</tr></thead>
+<tbody>{{range .Entries}}
+<tr>
+<td data-val="{{.Title}}"><a href="/{{.Slug}}/">{{.Title}}</a>{{if .Description}}<div class="sub">{{.Description}}</div>{{end}}<div class="sub actions"><a href="/{{.Slug}}/-/browse">Browse</a> · <a href="/{{.Slug}}/-/search">Search</a> · <a href="/{{.Slug}}/-/random">Random</a></div></td>
+<td data-val="{{.Filename}}">{{.Filename}}{{if .Language}} <span class="sub" style="display:inline">[{{.Language}}]</span>{{end}}{{if or .Creator .Flavour}}<div class="sub">{{.Creator}}{{if and .Creator .Flavour}} · {{end}}{{.Flavour}}</div>{{end}}</td>
+<td data-val="{{.Date}}" class="date">{{if .Date}}{{.Date}}{{else}}—{{end}}</td>
+<td data-val="{{.EntryCount}}" class="num">{{commaInt .EntryCount}}</td>
+{{if not $.NoInfo}}<td><a href="/{{.Slug}}/-/info" title="File info">ⓘ</a></td>{{end}}
+</tr>{{end}}
+</tbody></table>
+{{end}}

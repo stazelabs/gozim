@@ -10,14 +10,14 @@ import (
 // Entry represents a directory entry in a ZIM file.
 // It may be either a content entry or a redirect entry.
 type Entry struct {
-	archive     *Archive
-	index       uint32
-	mimeIndex   uint16
-	paramLen    uint8
-	namespace   byte
-	revision    uint32
-	path        string
-	title       string
+	archive   *Archive
+	index     uint32
+	mimeIndex uint16
+	paramLen  uint8
+	namespace byte
+	revision  uint32
+	path      string
+	title     string
 
 	// Content entry fields (valid when !IsRedirect())
 	clusterNum uint32

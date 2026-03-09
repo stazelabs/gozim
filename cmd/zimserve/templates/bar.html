@@ -1,0 +1,27 @@
+{{define "bar"}}<style>
+#gzim-bar{position:sticky;top:0;z-index:999999;background:#f6f8fa;border-bottom:1px solid #d0d7de;padding:4px 12px;font:13px/1.4 system-ui,sans-serif;display:flex;align-items:center;gap:10px;flex-wrap:wrap;box-sizing:border-box}
+#gzim-bar *{box-sizing:border-box;margin:0;padding:0}
+#gzim-bar a{color:#0366d6;text-decoration:none}
+#gzim-bar a:hover{text-decoration:underline}
+#gzim-bar .gzim-title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+#gzim-bar .gzim-sep{color:#d0d7de}
+#gzim-bar form{display:flex;gap:4px}
+#gzim-bar input[type=text]{padding:2px 6px;border:1px solid #d0d7de;border-radius:3px;font-size:13px;width:160px}
+#gzim-bar input[type=text]:focus{outline:none;border-color:#0366d6}
+#gzim-bar .gzim-btn{padding:2px 8px;border:1px solid #d0d7de;border-radius:3px;background:#fff;font-size:13px;cursor:pointer;color:#0366d6;text-decoration:none;white-space:nowrap}
+#gzim-bar .gzim-btn:hover{background:#f0f3f6;text-decoration:none}
+#gzim-bar .gzim-az{display:flex;gap:2px;flex-wrap:wrap}
+#gzim-bar .gzim-az a{padding:1px 4px;border-radius:2px;font-size:12px;font-weight:600}
+#gzim-bar .gzim-az a:hover{background:#ddf4ff;text-decoration:none}
+#gzim-bar .gzim-az span{padding:1px 4px;font-size:12px;font-weight:600;color:#ccc}
+body{padding-top:0!important}
+</style>
+<div id="gzim-bar">
+<a href="/">📚</a>
+<span class="gzim-sep">|</span>
+<a class="gzim-title" href="/{{.Slug}}/">{{.Title}}</a>
+<form action="/{{.Slug}}/-/search" method="get"><input type="text" name="q" placeholder="Search…"><button class="gzim-btn" type="submit">Search</button></form>
+<a class="gzim-btn" href="/{{.Slug}}/-/random">Random</a>
+<span class="gzim-sep">|</span>
+<span class="gzim-az">{{range .Letters}}{{if .Active}}<a href="/{{$.Slug}}/-/browse?letter={{.L}}">{{.L}}</a>{{else}}<span>{{.L}}</span>{{end}}{{end}}</span>
+</div>{{end}}

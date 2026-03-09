@@ -1,0 +1,19 @@
+{{define "title"}}{{.Heading}} — {{.Title}}{{end}}
+{{define "body"}}
+<h1><a href="/">📚 Library</a></h1><h2><code>{{.Heading}}</code> — <a href="/{{.Slug}}/-/info">{{.Title}}</a></h2>
+<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/{{.Slug}}/-/info">Info</a></div>
+<p class="count">{{.Total}} entries total</p>
+<table><tr><th style="width:60%">Path</th><th>Title</th></tr>
+{{range .Matches}}
+<tr>
+<td class="mono">{{if .ContentLink}}<a href="{{.ContentLink}}">{{.Path}}</a> <a href="/{{$.Slug}}/-/info/entry?idx={{.Index}}" style="font-size:0.8em;color:#888" title="Entry details">ⓘ</a>{{else}}<a href="/{{$.Slug}}/-/info/entry?idx={{.Index}}">{{.FullPath}}</a>{{end}}</td>
+<td>{{.Title}}</td>
+</tr>
+{{end}}
+</table>
+<div class="pager">
+{{if .HasPrev}}<a href="/{{.Slug}}/-/info/mime?type={{.MIMEFilter}}&offset={{.PrevOffset}}&limit={{.Limit}}">Previous</a>{{end}}
+{{if .HasNext}}<a href="/{{.Slug}}/-/info/mime?type={{.MIMEFilter}}&offset={{.NextOffset}}&limit={{.Limit}}">Next</a>{{end}}
+</div>
+<div class="nav"><a href="/{{.Slug}}/-/info">Back to info</a></div>
+{{end}}

@@ -1,6 +1,7 @@
 package zim
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 	"os"
@@ -67,7 +68,7 @@ func TestEntryByIndex(t *testing.T) {
 		entry.Namespace(), entry.Path(), entry.Title(), entry.IsRedirect(), entry.MIMEType())
 
 	// List all entries
-	for i := uint32(0); i < a.EntryCount(); i++ {
+	for i := range a.EntryCount() {
 		e, err := a.EntryByIndex(i)
 		if err != nil {
 			t.Fatalf("EntryByIndex(%d): %v", i, err)
@@ -88,7 +89,7 @@ func TestEntryByPath(t *testing.T) {
 
 	// First, find what paths exist
 	var paths []string
-	for i := uint32(0); i < a.EntryCount(); i++ {
+	for i := range a.EntryCount() {
 		e, err := a.EntryByIndex(i)
 		if err != nil {
 			t.Fatalf("EntryByIndex(%d): %v", i, err)
@@ -129,7 +130,7 @@ func TestReadContent(t *testing.T) {
 	defer a.Close()
 
 	// Find the first non-redirect content entry
-	for i := uint32(0); i < a.EntryCount(); i++ {
+	for i := range a.EntryCount() {
 		e, err := a.EntryByIndex(i)
 		if err != nil {
 			t.Fatalf("EntryByIndex(%d): %v", i, err)
@@ -163,7 +164,7 @@ func TestBlobCopy(t *testing.T) {
 	}
 	defer a.Close()
 
-	for i := uint32(0); i < a.EntryCount(); i++ {
+	for i := range a.EntryCount() {
 		e, err := a.EntryByIndex(i)
 		if err != nil {
 			t.Fatalf("EntryByIndex(%d): %v", i, err)
@@ -220,7 +221,7 @@ func TestReadContentCopy(t *testing.T) {
 	}
 	defer a.Close()
 
-	for i := uint32(0); i < a.EntryCount(); i++ {
+	for i := range a.EntryCount() {
 		e, err := a.EntryByIndex(i)
 		if err != nil {
 			t.Fatalf("EntryByIndex(%d): %v", i, err)
@@ -259,7 +260,7 @@ func TestReadContentCopySurvivesEviction(t *testing.T) {
 		data []byte
 	}
 	var entries []saved
-	for i := uint32(0); i < a.EntryCount(); i++ {
+	for i := range a.EntryCount() {
 		e, err := a.EntryByIndex(i)
 		if err != nil {
 			t.Fatalf("EntryByIndex(%d): %v", i, err)
@@ -300,7 +301,7 @@ func TestContentSize(t *testing.T) {
 	}
 	defer a.Close()
 
-	for i := uint32(0); i < a.EntryCount(); i++ {
+	for i := range a.EntryCount() {
 		e, err := a.EntryByIndex(i)
 		if err != nil {
 			t.Fatalf("EntryByIndex(%d): %v", i, err)
@@ -332,7 +333,7 @@ func TestContentReader(t *testing.T) {
 	}
 	defer a.Close()
 
-	for i := uint32(0); i < a.EntryCount(); i++ {
+	for i := range a.EntryCount() {
 		e, err := a.EntryByIndex(i)
 		if err != nil {
 			t.Fatalf("EntryByIndex(%d): %v", i, err)
@@ -370,7 +371,7 @@ func TestEntryCountByNamespace(t *testing.T) {
 
 	// Count entries manually per namespace
 	counts := make(map[byte]int)
-	for i := uint32(0); i < a.EntryCount(); i++ {
+	for i := range a.EntryCount() {
 		e, err := a.EntryByIndex(i)
 		if err != nil {
 			t.Fatalf("EntryByIndex(%d): %v", i, err)
@@ -417,7 +418,7 @@ func TestRandomEntry(t *testing.T) {
 	}
 
 	// Get a random entry and verify it's in the right namespace
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		e, err := a.RandomEntry(ns)
 		if err != nil {
 			t.Fatalf("RandomEntry(%c): %v", ns, err)
@@ -865,7 +866,7 @@ func TestConcurrentReadContent(t *testing.T) {
 
 	// Collect non-redirect entry indices
 	var indices []uint32
-	for i := uint32(0); i < a.EntryCount(); i++ {
+	for i := range a.EntryCount() {
 		e, err := a.EntryByIndex(i)
 		if err != nil {
 			t.Fatalf("EntryByIndex(%d): %v", i, err)
@@ -895,11 +896,11 @@ func TestConcurrentReadContent(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan string, goroutines*len(indices)*iterations)
 
-	for g := 0; g < goroutines; g++ {
+	for range goroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for iter := 0; iter < iterations; iter++ {
+			for range iterations {
 				for _, idx := range indices {
 					e, err := a.EntryByIndex(idx)
 					if err != nil {
@@ -923,6 +924,119 @@ func TestConcurrentReadContent(t *testing.T) {
 
 	for msg := range errCh {
 		t.Error(msg)
+	}
+}
+
+// buildMinimalHeader returns an 80-byte ZIM header with the given MIMEListPos
+// and URLPtrPos values; all other numeric fields are zero.
+func buildMinimalHeader(mimeListPos, urlPtrPos uint64) []byte {
+	buf := make([]byte, headerSize)
+	binary.LittleEndian.PutUint32(buf[0:4], zimMagic)
+	binary.LittleEndian.PutUint16(buf[4:6], 5) // MajorVersion
+	binary.LittleEndian.PutUint64(buf[32:40], urlPtrPos)
+	// TitlePtrPos — must not equal noTitlePtrList sentinel
+	binary.LittleEndian.PutUint64(buf[40:48], 0)
+	binary.LittleEndian.PutUint64(buf[56:64], mimeListPos)
+	return buf
+}
+
+func TestInitMIMEListURLPtrPrecedesMIMEList(t *testing.T) {
+	// URLPtrPos < MIMEListPos — must return an error.
+	hdrBuf := buildMinimalHeader(200, 100) // urlPtrPos=100 < mimeListPos=200
+	raw := make([]byte, 512)
+	copy(raw, hdrBuf)
+
+	a := &Archive{r: &bytesReader{data: raw}, cacheSize: 1, clusterCache: map[uint32]*cluster{}}
+	if err := a.init(); err == nil {
+		t.Fatal("expected error when URLPtrPos < MIMEListPos, got nil")
+	}
+}
+
+func TestInitMIMEListTooLarge(t *testing.T) {
+	// URLPtrPos - MIMEListPos > 1 MiB — must return an error.
+	const mimeStart = uint64(headerSize)
+	const urlPtr = mimeStart + maxMIMEListSize + 1
+	hdrBuf := buildMinimalHeader(mimeStart, urlPtr)
+	// Allocate a buffer large enough that the ReadAt won't fail on length.
+	raw := make([]byte, urlPtr+8)
+	copy(raw, hdrBuf)
+
+	a := &Archive{r: &bytesReader{data: raw}, cacheSize: 1, clusterCache: map[uint32]*cluster{}}
+	if err := a.init(); err == nil {
+		t.Fatal("expected error when MIME list exceeds size limit, got nil")
+	}
+}
+
+// buildZIMWithOOBTitleListing constructs a minimal in-memory ZIM binary whose
+// X/listing/titleOrdered/v1 entry contains a title index >= EntryCount (1).
+// Layout (all offsets are exact):
+//
+//	[0,    80)   header
+//	[80,  117)   MIME list ("application/octet-stream+zimlisting\0\0")
+//	[117, 125)   URL pointer table (1 × uint64)
+//	[125, 166)   directory entry for X/listing/titleOrdered/v1
+//	[166, 174)   cluster pointer table (1 × uint64)
+//	[174, 187)   cluster data (uncompressed, 1 blob = uint32(1) — out-of-range)
+func buildZIMWithOOBTitleListing() []byte {
+	le := binary.LittleEndian
+	const (
+		mimePos       = uint64(headerSize) // 80
+		urlPtrPos     = uint64(117)        // mimePos + 37 (MIME list bytes)
+		dirEntryPos   = uint64(125)        // urlPtrPos + 8
+		clusterPtrPos = uint64(166)        // dirEntryPos + 41
+		clusterPos    = uint64(174)        // clusterPtrPos + 8
+		checksumPos   = uint64(187)        // clusterPos + 13
+		entryCount    = uint32(1)
+		clusterCount  = uint32(1)
+	)
+
+	buf := make([]byte, checksumPos)
+
+	// Header
+	le.PutUint32(buf[0:4], zimMagic)
+	le.PutUint16(buf[4:6], 5) // MajorVersion
+	le.PutUint32(buf[24:28], entryCount)
+	le.PutUint32(buf[28:32], clusterCount)
+	le.PutUint64(buf[32:40], urlPtrPos)
+	le.PutUint64(buf[40:48], noTitlePtrList) // triggers loadTitleListing
+	le.PutUint64(buf[48:56], clusterPtrPos)
+	le.PutUint64(buf[56:64], mimePos)
+	le.PutUint32(buf[64:68], noMainPage)
+	le.PutUint32(buf[68:72], noMainPage)
+	le.PutUint64(buf[72:80], checksumPos)
+
+	// MIME list (37 bytes)
+	copy(buf[mimePos:], "application/octet-stream+zimlisting\x00\x00")
+
+	// URL pointer table: 1 entry
+	le.PutUint64(buf[urlPtrPos:], dirEntryPos)
+
+	// Directory entry for the listing (41 bytes)
+	dirEntry := makeContentEntry(0, 'X', 0, 0, "listing/titleOrdered/v1", "")
+	copy(buf[dirEntryPos:], dirEntry)
+
+	// Cluster pointer table: 1 entry
+	le.PutUint64(buf[clusterPtrPos:], clusterPos)
+
+	// Cluster data: uncompressed (info=0x01), 1 blob = uint32(1)
+	// Offset table: [8, 12] means blob is bytes [8,12) within decompressed data.
+	buf[clusterPos] = 0x01               // info byte: compNone, non-extended
+	le.PutUint32(buf[clusterPos+1:], 8)  // offset[0]: end of 2-entry offset table
+	le.PutUint32(buf[clusterPos+5:], 12) // offset[1]: end of blob
+	le.PutUint32(buf[clusterPos+9:], 1)  // blob: title index 1 >= entryCount(1)
+
+	return buf
+}
+
+func TestLoadTitleListingOutOfRangeIndex(t *testing.T) {
+	raw := buildZIMWithOOBTitleListing()
+	a := &Archive{r: &bytesReader{data: raw}, cacheSize: 1, clusterCache: map[uint32]*cluster{}}
+	err := a.init()
+	if err == nil {
+		t.Fatal("expected error for out-of-range title index, got nil")
+	}
+	if !strings.Contains(err.Error(), "out of range") {
+		t.Errorf("error %q should contain 'out of range'", err.Error())
 	}
 }
 

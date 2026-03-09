@@ -74,6 +74,6 @@ func run(args []string, listFlag, metaFlag bool) error {
 		return fmt.Errorf("reading content: %w", err)
 	}
 
-	os.Stdout.Write(data)
+	_, _ = os.Stdout.Write(data)
 	return nil
 }

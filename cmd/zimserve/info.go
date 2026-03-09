@@ -2,27 +2,24 @@ package main
 
 import (
 	"fmt"
-	"html"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 )
 
-// handleInfo serves GET /{slug}/-/info — diagnostics/metadata page for a ZIM file.
+// handleInfo serves GET /{slug}/-/info
 func (lib *library) handleInfo(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	ze, ok := lib.archives[slug]
 	if !ok {
-		http.NotFound(w, r)
+		write404(w)
 		return
 	}
 
 	a := ze.archive
 
-	// Gather namespace counts by probing known namespaces via binary search.
-	// This avoids iterating all entries — O(k log N) where k is the number of
-	// known namespaces, instead of O(N).
 	type nsCount struct {
 		NS    byte
 		Count int
@@ -34,7 +31,6 @@ func (lib *library) handleInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Count MIME types by iterating C namespace
 	mimeCounts := make(map[string]int)
 	redirectCount := 0
 	for e := range a.EntriesByTitlePrefix('C', "") {
@@ -58,7 +54,6 @@ func (lib *library) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(mimeList, func(i, j int) bool { return mimeList[i].Count > mimeList[j].Count })
 
-	// Metadata keys to try
 	metaKeys := []string{
 		"Title", "Creator", "Publisher", "Date", "Description",
 		"LongDescription", "Language", "License", "Tags", "Relation",
@@ -68,11 +63,11 @@ func (lib *library) handleInfo(w http.ResponseWriter, r *http.Request) {
 		Key   string
 		Value string
 	}
-	var metadata []metaEntry
+	var rawMeta []metaEntry
 	for _, key := range metaKeys {
 		val, err := a.Metadata(key)
 		if err == nil && val != "" {
-			metadata = append(metadata, metaEntry{key, val})
+			rawMeta = append(rawMeta, metaEntry{key, val})
 		}
 	}
 
@@ -80,95 +75,27 @@ func (lib *library) handleInfo(w http.ResponseWriter, r *http.Request) {
 	uuidStr := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:16])
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Info — %s</title>
-` + faviconLink + `
-<style>
-body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }
-h1 { border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 4px; }
-h1 a { color: inherit; text-decoration: none; }
-h1 a:hover { text-decoration: none; }
-h2 { font-size: 1.15em; margin-top: 28px; color: #333; }
-table { border-collapse: collapse; width: 100%%; margin-bottom: 16px; }
-th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eee; }
-th { width: 200px; color: #555; font-weight: 600; white-space: nowrap; }
-td { word-break: break-all; }
-td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.mono { font-family: ui-monospace, monospace; font-size: 0.9em; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; font-weight: 600; }
-.badge-yes { background: #dcffe4; color: #1a7f37; }
-.badge-no { background: #ffebe9; color: #cf222e; }
-.nav { margin-top: 20px; font-size: 0.9em; }
-.nav a { color: #0366d6; text-decoration: none; }
-.nav a:hover { text-decoration: underline; }
-a { color: #0366d6; text-decoration: none; }
-a:hover { text-decoration: underline; }
-</style></head><body>
-<h1><a href="/">📚 Library</a></h1><h2>Info — <a href="/%s/">%s</a></h2>
-<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a></div>`,
-		html.EscapeString(ze.title),
-		html.EscapeString(slug), html.EscapeString(ze.title))
-
-	// Header / Format
-	fmt.Fprint(w, `<h2>Format</h2><table>`)
-	fmt.Fprintf(w, `<tr><th>Filename</th><td>%s</td></tr>`, html.EscapeString(ze.filename))
-	fmt.Fprintf(w, `<tr><th>UUID</th><td class="mono">%s</td></tr>`, uuidStr)
-	fmt.Fprintf(w, `<tr><th>ZIM Version</th><td>%d.%d</td></tr>`, a.MajorVersion(), a.MinorVersion())
-	fmt.Fprintf(w, `<tr><th>Entry Count</th><td>%d</td></tr>`, a.EntryCount())
-	fmt.Fprintf(w, `<tr><th>Cluster Count</th><td><a href="/%s/-/info/cluster">%d</a></td></tr>`, html.EscapeString(slug), a.ClusterCount())
 	cs := a.CacheStats()
 	hitRate := "—"
 	if total := cs.Hits + cs.Misses; total > 0 {
 		hitRate = fmt.Sprintf("%.1f%%", 100*float64(cs.Hits)/float64(total))
 	}
-	fmt.Fprintf(w, `<tr><th>Cluster Cache</th><td>%d / %d slots used &nbsp;·&nbsp; %s hit rate (%d hits, %d misses) &nbsp;·&nbsp; %s cached</td></tr>`,
-		cs.Size, cs.Capacity, hitRate, cs.Hits, cs.Misses, formatBytes(cs.Bytes))
 
-	yesNo := func(b bool) string {
-		if b {
-			return `<span class="badge badge-yes">Yes</span>`
-		}
-		return `<span class="badge badge-no">No</span>`
-	}
-	fmt.Fprintf(w, `<tr><th>Has Main Entry</th><td>%s</td></tr>`, yesNo(a.HasMainEntry()))
+	mainPath, mainTitle := "", ""
 	if a.HasMainEntry() {
 		if main, err := a.MainEntry(); err == nil {
-			resolved, _ := main.Resolve()
-			fmt.Fprintf(w, `<tr><th>Main Page</th><td><a href="/%s/%s">%s</a></td></tr>`,
-				html.EscapeString(slug), html.EscapeString(resolved.Path()), html.EscapeString(resolved.Title()))
-		}
-	}
-	fmtIndex := func(has bool, format string) string {
-		if !has {
-			return `<span class="badge badge-no">No</span>`
-		}
-		s := `<span class="badge badge-yes">Yes</span>`
-		if format != "" {
-			s += ` <span class="mono" style="color:#555">` + html.EscapeString(format) + `</span>`
-		}
-		return s
-	}
-	fmt.Fprintf(w, `<tr><th>Full-text Index</th><td>%s</td></tr>`, fmtIndex(a.HasFulltextIndex(), a.FulltextIndexFormat()))
-	fmt.Fprintf(w, `<tr><th>Title Index</th><td>%s</td></tr>`, fmtIndex(a.HasTitleIndex(), a.TitleIndexFormat()))
-	fmt.Fprint(w, `</table>`)
-
-	// Metadata
-	if len(metadata) > 0 {
-		fmt.Fprint(w, `<h2>Metadata</h2><table>`)
-		for _, m := range metadata {
-			val := html.EscapeString(m.Value)
-			// Wrap long values
-			if len(m.Value) > 200 {
-				val = `<div style="max-height:100px;overflow-y:auto">` + val + `</div>`
+			if resolved, err := main.Resolve(); err == nil {
+				mainPath = resolved.Path()
+				mainTitle = resolved.Title()
 			}
-			fmt.Fprintf(w, `<tr><th>%s</th><td>%s</td></tr>`, html.EscapeString(m.Key), val)
 		}
-		fmt.Fprint(w, `</table>`)
 	}
 
-	// Namespaces
-	fmt.Fprint(w, `<h2>Namespaces</h2><table><tr><th>Namespace</th><th>Description</th><th style="text-align:right">Entries</th></tr>`)
+	metadata := make([]infoMetaRow, len(rawMeta))
+	for i, m := range rawMeta {
+		metadata[i] = infoMetaRow{Key: m.Key, Value: m.Value, Long: len(m.Value) > 200}
+	}
+
 	nsNames := map[byte]string{
 		'C': "Content",
 		'M': "Metadata",
@@ -179,74 +106,59 @@ a:hover { text-decoration: underline; }
 		'I': "Images (legacy ZIM v5)",
 		'-': "Misc (legacy ZIM v5)",
 	}
+	namespaces := make([]infoNSRow, 0, len(nsCounts))
 	for _, nc := range nsCounts {
 		desc := nsNames[nc.NS]
 		if desc == "" {
 			desc = "Other"
 		}
-		fmt.Fprintf(w, `<tr><td class="mono">%c</td><td>%s</td><td class="num"><a href="/%s/-/info/ns?ns=%c">%d</a></td></tr>`,
-			nc.NS, html.EscapeString(desc), html.EscapeString(slug), nc.NS, nc.Count)
-	}
-	fmt.Fprint(w, `</table>`)
-
-	// MIME types in C namespace
-	if len(mimeList) > 0 {
-		fmt.Fprint(w, `<h2>Content Types (C namespace)</h2><table><tr><th>MIME Type</th><th style="text-align:right">Count</th></tr>`)
-		for _, mc := range mimeList {
-			fmt.Fprintf(w, `<tr><td class="mono">%s</td><td class="num"><a href="/%s/-/info/mime?type=%s">%d</a></td></tr>`,
-				html.EscapeString(mc.MIME), html.EscapeString(slug), html.EscapeString(mc.MIME), mc.Count)
-		}
-		if redirectCount > 0 {
-			fmt.Fprintf(w, `<tr><td><em>Redirects</em></td><td class="num"><a href="/%s/-/info/mime?type=redirect">%d</a></td></tr>`,
-				html.EscapeString(slug), redirectCount)
-		}
-		fmt.Fprint(w, `</table>`)
+		namespaces = append(namespaces, infoNSRow{
+			NS:    string(rune(nc.NS)),
+			Desc:  desc,
+			Count: nc.Count,
+		})
 	}
 
-	// MIME type list (registered in header)
-	mimeTypes := a.MIMETypes()
-	if len(mimeTypes) > 0 {
-		fmt.Fprint(w, `<h2>Registered MIME Types</h2><table><tr><th style="width:60px">Index</th><th>MIME Type</th></tr>`)
-		for i, m := range mimeTypes {
-			fmt.Fprintf(w, `<tr><td>%d</td><td class="mono"><a href="/%s/-/info/ns?ns=C&amp;type=%s">%s</a></td></tr>`,
-				i, html.EscapeString(slug), html.EscapeString(m), html.EscapeString(m))
-		}
-		fmt.Fprint(w, `</table>`)
+	mimeCountRows := make([]infoMIMECountRow, len(mimeList))
+	for i, mc := range mimeList {
+		mimeCountRows[i] = infoMIMECountRow(mc)
 	}
 
-	fmt.Fprintf(w, `<div class="nav"><a href="/">Library</a> · <a href="/%s/">Main page</a> · <a href="/%s/-/search">Search</a> · <a href="/%s/-/browse">Browse</a></div>`,
-		html.EscapeString(slug), html.EscapeString(slug), html.EscapeString(slug))
-	fmt.Fprint(w, footerBarHTML())
-	fmt.Fprint(w, `</body></html>`)
+	regMIMETypes := a.MIMETypes()
+	mimeTypeRows := make([]infoMIMETypeRow, len(regMIMETypes))
+	for i, m := range regMIMETypes {
+		mimeTypeRows[i] = infoMIMETypeRow{Index: i, MIME: m}
+	}
+
+	renderWith(w, tmplInfo, infoData{
+		Slug:         slug,
+		Title:        ze.title,
+		Filename:     ze.filename,
+		UUID:         uuidStr,
+		MajorVersion: a.MajorVersion(),
+		MinorVersion: a.MinorVersion(),
+		EntryCount:   a.EntryCount(),
+		ClusterCount: a.ClusterCount(),
+		Cache: infoCacheData{
+			Size:     cs.Size,
+			Capacity: cs.Capacity,
+			HitRate:  hitRate,
+			Hits:     cs.Hits,
+			Misses:   cs.Misses,
+			Bytes:    formatBytes(cs.Bytes),
+		},
+		HasMainEntry:  a.HasMainEntry(),
+		MainPath:      mainPath,
+		MainTitle:     mainTitle,
+		FulltextIndex: infoIndexData{Has: a.HasFulltextIndex(), Format: a.FulltextIndexFormat()},
+		TitleIndex:    infoIndexData{Has: a.HasTitleIndex(), Format: a.TitleIndexFormat()},
+		Metadata:      metadata,
+		Namespaces:    namespaces,
+		MIMECounts:    mimeCountRows,
+		RedirectCount: redirectCount,
+		MIMETypes:     mimeTypeRows,
+	})
 }
-
-// infoPageCSS is the shared stylesheet for info drill-down pages.
-const infoPageCSS = `
-body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }
-h1 { border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 4px; }
-h1 a { color: inherit; text-decoration: none; }
-h1 a:hover { text-decoration: none; }
-h2 { font-size: 1.15em; margin-top: 28px; color: #333; }
-table { border-collapse: collapse; width: 100%%; margin-bottom: 16px; }
-th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eee; }
-th { color: #555; font-weight: 600; }
-td.mono { font-family: ui-monospace, monospace; font-size: 0.9em; }
-td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; font-weight: 600; }
-.badge-redirect { background: #fff8c5; color: #735c0f; }
-.badge-mime { background: #ddf4ff; color: #0969da; }
-a { color: #0366d6; text-decoration: none; }
-a:hover { text-decoration: underline; }
-.pager { margin-top: 16px; font-size: 0.9em; }
-.pager a { margin-right: 12px; }
-.nav { margin-top: 20px; font-size: 0.9em; }
-.count { color: #666; font-size: 0.9em; margin-bottom: 12px; }
-.filter-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 0.9em; }
-.filter-bar select, .filter-bar button { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9em; }
-.filter-bar button { cursor: pointer; background: #f6f8fa; }
-.filter-bar button:hover { background: #e1e4e8; }
-.filter-active { color: #0969da; font-weight: 600; }
-`
 
 func parseOffsetLimit(r *http.Request) (int, int) {
 	offset := 0
@@ -264,18 +176,18 @@ func parseOffsetLimit(r *http.Request) (int, int) {
 	return offset, limit
 }
 
-// handleInfoNamespace serves GET /{slug}/-/info/ns?ns=C[&type=text/html] — lists entries in a namespace.
+// handleInfoNamespace serves GET /{slug}/-/info/ns?ns=C[&type=text/html]
 func (lib *library) handleInfoNamespace(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	ze, ok := lib.archives[slug]
 	if !ok {
-		http.NotFound(w, r)
+		write404(w)
 		return
 	}
 
 	nsStr := r.URL.Query().Get("ns")
 	if len(nsStr) != 1 {
-		http.Error(w, "ns parameter must be a single character", http.StatusBadRequest)
+		writeBadRequest(w, "The \u2018ns\u2019 parameter must be a single character.")
 		return
 	}
 	ns := nsStr[0]
@@ -285,19 +197,19 @@ func (lib *library) handleInfoNamespace(w http.ResponseWriter, r *http.Request) 
 	a := ze.archive
 
 	type nsRow struct {
-		index    uint32
-		path     string
-		fullPath string
-		title    string
-		redirect bool
-		mime     string
+		index     uint32
+		path      string
+		fullPath  string
+		title     string
+		redirect  bool
+		mime      string
+		isContent bool
 	}
 
 	var rows []nsRow
 	var total int
 
 	if typeFilter == "" {
-		// Fast path: binary-search total, iterate with skip.
 		total = a.EntryCountByNamespace(ns)
 		skipped := 0
 		for e := range a.EntriesByNamespace(ns) {
@@ -312,10 +224,17 @@ func (lib *library) handleInfoNamespace(w http.ResponseWriter, r *http.Request) 
 			if !e.IsRedirect() {
 				mime = e.MIMEType()
 			}
-			rows = append(rows, nsRow{e.Index(), e.Path(), e.FullPath(), e.Title(), e.IsRedirect(), mime})
+			rows = append(rows, nsRow{
+				index:     e.Index(),
+				path:      e.Path(),
+				fullPath:  e.FullPath(),
+				title:     e.Title(),
+				redirect:  e.IsRedirect(),
+				mime:      mime,
+				isContent: ns == 'C' && !e.IsRedirect(),
+			})
 		}
 	} else {
-		// Filtered path: full scan, single pass for total + window.
 		isRedirect := typeFilter == "redirect"
 		for e := range a.EntriesByNamespace(ns) {
 			if isRedirect {
@@ -332,116 +251,61 @@ func (lib *library) handleInfoNamespace(w http.ResponseWriter, r *http.Request) 
 				if !e.IsRedirect() {
 					mime = e.MIMEType()
 				}
-				rows = append(rows, nsRow{e.Index(), e.Path(), e.FullPath(), e.Title(), e.IsRedirect(), mime})
+				rows = append(rows, nsRow{
+					index:     e.Index(),
+					path:      e.Path(),
+					fullPath:  e.FullPath(),
+					title:     e.Title(),
+					redirect:  e.IsRedirect(),
+					mime:      mime,
+					isContent: ns == 'C' && !e.IsRedirect(),
+				})
 			}
 			total++
 		}
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Namespace %c — %s</title>
-` + faviconLink + `
-<style>%s</style></head><body>
-<h1><a href="/">📚 Library</a></h1><h2>Namespace <code>%c</code> — <a href="/%s/-/info">%s</a></h2>
-<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/%s/-/info">Info</a></div>`,
-		ns, html.EscapeString(ze.title),
-		infoPageCSS,
-		ns, html.EscapeString(slug), html.EscapeString(ze.title),
-		html.EscapeString(slug))
-
-	// Type filter bar
-	mimeTypes := a.MIMETypes()
-	fmt.Fprintf(w, `<form class="filter-bar" method="get" action="">
-<input type="hidden" name="ns" value="%c">
-<label for="type-select">Type:</label>
-<select id="type-select" name="type">
-<option value="">All</option>
-<option value="redirect"%s>redirect</option>`,
-		ns, selected(typeFilter == "redirect"))
-	for _, m := range mimeTypes {
-		fmt.Fprintf(w, `<option value="%s"%s>%s</option>`,
-			html.EscapeString(m), selected(typeFilter == m), html.EscapeString(m))
-	}
-	fmt.Fprint(w, `</select><button type="submit">Filter</button>`)
-	if typeFilter != "" {
-		fmt.Fprintf(w, ` <a href="/%s/-/info/ns?ns=%c">Clear</a>`, html.EscapeString(slug), ns)
-	}
-	fmt.Fprint(w, `</form>`)
-
-	fmt.Fprintf(w, `<p class="count">%d entries`, total)
-	if typeFilter != "" {
-		fmt.Fprintf(w, ` matching <span class="filter-active">%s</span>`, html.EscapeString(typeFilter))
-	}
-	fmt.Fprint(w, `</p>`)
-
-	fmt.Fprint(w, `<table><tr><th style="width:50%">Path</th><th>Title</th><th>Type</th></tr>`)
-	for _, row := range rows {
-		typeCell := ""
-		if row.redirect {
-			typeCell = `<span class="badge badge-redirect">redirect</span>`
-		} else if row.mime != "" {
-			typeCell = fmt.Sprintf(`<span class="badge badge-mime">%s</span>`, html.EscapeString(row.mime))
+	rowItems := make([]infoNSRowItem, len(rows))
+	for i, row := range rows {
+		rowItems[i] = infoNSRowItem{
+			Index:      row.index,
+			Path:       row.path,
+			FullPath:   row.fullPath,
+			Title:      row.title,
+			IsRedirect: row.redirect,
+			IsContent:  row.isContent,
+			MIME:       row.mime,
 		}
-
-		entryLink := fmt.Sprintf("/%s/-/info/entry?idx=%d", html.EscapeString(slug), row.index)
-		var pathCell string
-		if ns == 'C' && !row.redirect {
-			pathCell = fmt.Sprintf(`<a href="/%s/%s">%s</a> <a href="%s" style="font-size:0.8em;color:#888" title="Entry details">&#x2139;&#xFE0E;</a>`,
-				html.EscapeString(slug), html.EscapeString(row.path), html.EscapeString(row.path), entryLink)
-		} else {
-			pathCell = fmt.Sprintf(`<a href="%s">%s</a>`, entryLink, html.EscapeString(row.fullPath))
-		}
-
-		fmt.Fprintf(w, `<tr><td class="mono">%s</td><td>%s</td><td>%s</td></tr>`,
-			pathCell, html.EscapeString(row.title), typeCell)
 	}
-	fmt.Fprint(w, `</table>`)
 
-	// Pager
-	baseURL := fmt.Sprintf("/%s/-/info/ns?ns=%c", html.EscapeString(slug), ns)
-	if typeFilter != "" {
-		baseURL += "&type=" + html.EscapeString(typeFilter)
-	}
-	fmt.Fprint(w, `<div class="pager">`)
-	if offset > 0 {
-		prev := offset - limit
-		if prev < 0 {
-			prev = 0
-		}
-		fmt.Fprintf(w, `<a href="%s&offset=%d&limit=%d">Previous</a>`, baseURL, prev, limit)
-	}
-	if offset+len(rows) < total {
-		fmt.Fprintf(w, `<a href="%s&offset=%d&limit=%d">Next</a>`, baseURL, offset+limit, limit)
-	}
-	fmt.Fprint(w, `</div>`)
-
-	fmt.Fprintf(w, `<div class="nav"><a href="/%s/-/info">Back to info</a></div>`,
-		html.EscapeString(slug))
-	fmt.Fprint(w, footerBarHTML())
-	fmt.Fprint(w, `</body></html>`)
+	renderWith(w, tmplInfoNS, infoNSData{
+		Slug:       slug,
+		Title:      ze.title,
+		NS:         nsStr,
+		TypeFilter: typeFilter,
+		MIMETypes:  a.MIMETypes(),
+		Total:      total,
+		Rows:       rowItems,
+		HasPrev:    offset > 0,
+		HasNext:    offset+len(rows) < total,
+		PrevOffset: max(offset-limit, 0),
+		NextOffset: offset + limit,
+		Limit:      limit,
+	})
 }
 
-// selected returns the HTML selected attribute if cond is true.
-func selected(cond bool) string {
-	if cond {
-		return ` selected`
-	}
-	return ""
-}
-
-// handleInfoMIME serves GET /{slug}/-/info/mime?type=text/html — lists C entries by MIME type.
+// handleInfoMIME serves GET /{slug}/-/info/mime?type=text/html
 func (lib *library) handleInfoMIME(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	ze, ok := lib.archives[slug]
 	if !ok {
-		http.NotFound(w, r)
+		write404(w)
 		return
 	}
 
 	mimeFilter := r.URL.Query().Get("type")
 	if mimeFilter == "" {
-		http.Error(w, "type parameter required", http.StatusBadRequest)
+		writeBadRequest(w, "A \u2018type\u2019 parameter is required.")
 		return
 	}
 	isRedirect := mimeFilter == "redirect"
@@ -449,7 +313,6 @@ func (lib *library) handleInfoMIME(w http.ResponseWriter, r *http.Request) {
 
 	a := ze.archive
 
-	// Single pass: collect matching entries for the page window and total count.
 	type matchEntry struct {
 		index    uint32
 		path     string
@@ -486,356 +349,219 @@ func (lib *library) handleInfoMIME(w http.ResponseWriter, r *http.Request) {
 		heading = "Redirects"
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>%s — %s</title>
-` + faviconLink + `
-<style>%s</style></head><body>
-<h1><a href="/">📚 Library</a></h1><h2><code>%s</code> — <a href="/%s/-/info">%s</a></h2>
-<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/%s/-/info">Info</a></div>
-<p class="count">%d entries total</p>
-<table><tr><th style="width:60%%">Path</th><th>Title</th></tr>`,
-		html.EscapeString(heading), html.EscapeString(ze.title),
-		infoPageCSS,
-		html.EscapeString(heading), html.EscapeString(slug), html.EscapeString(ze.title),
-		html.EscapeString(slug),
-		total)
-
-	for _, m := range matches {
-		entryLink := fmt.Sprintf("/%s/-/info/entry?idx=%d", html.EscapeString(slug), m.index)
-		var pathCell string
+	matchRows := make([]infoMIMEMatch, len(matches))
+	for i, m := range matches {
+		var contentLink string
 		if !m.redirect && (mimeFilter == "text/html" || strings.HasPrefix(mimeFilter, "image/")) {
-			pathCell = fmt.Sprintf(`<a href="/%s/%s">%s</a> <a href="%s" style="font-size:0.8em;color:#888" title="Entry details">&#x2139;&#xFE0E;</a>`,
-				html.EscapeString(slug), html.EscapeString(m.path), html.EscapeString(m.path), entryLink)
-		} else {
-			pathCell = fmt.Sprintf(`<a href="%s">%s</a>`, entryLink, html.EscapeString(m.fullPath))
+			contentLink = "/" + slug + "/" + m.path
 		}
-
-		fmt.Fprintf(w, `<tr><td class="mono">%s</td><td>%s</td></tr>`,
-			pathCell, html.EscapeString(m.title))
-	}
-
-	fmt.Fprint(w, `</table>`)
-
-	// Pager
-	fmt.Fprint(w, `<div class="pager">`)
-	if offset > 0 {
-		prev := offset - limit
-		if prev < 0 {
-			prev = 0
+		matchRows[i] = infoMIMEMatch{
+			Index:       m.index,
+			Path:        m.path,
+			FullPath:    m.fullPath,
+			Title:       m.title,
+			ContentLink: contentLink,
 		}
-		fmt.Fprintf(w, `<a href="/%s/-/info/mime?type=%s&offset=%d&limit=%d">Previous</a>`,
-			html.EscapeString(slug), html.EscapeString(mimeFilter), prev, limit)
 	}
-	if offset+len(matches) < total {
-		fmt.Fprintf(w, `<a href="/%s/-/info/mime?type=%s&offset=%d&limit=%d">Next</a>`,
-			html.EscapeString(slug), html.EscapeString(mimeFilter), offset+limit, limit)
-	}
-	fmt.Fprint(w, `</div>`)
 
-	fmt.Fprintf(w, `<div class="nav"><a href="/%s/-/info">Back to info</a></div>`,
-		html.EscapeString(slug))
-	fmt.Fprint(w, footerBarHTML())
-	fmt.Fprint(w, `</body></html>`)
+	renderWith(w, tmplInfoMIME, infoMIMEData{
+		Slug:       slug,
+		Title:      ze.title,
+		Heading:    heading,
+		MIMEFilter: mimeFilter,
+		Total:      total,
+		Matches:    matchRows,
+		HasPrev:    offset > 0,
+		HasNext:    offset+len(matches) < total,
+		PrevOffset: max(offset-limit, 0),
+		NextOffset: offset + limit,
+		Limit:      limit,
+	})
 }
 
-// handleInfoEntry serves GET /{slug}/-/info/entry?idx=42 — detail page for a single entry.
+// handleInfoEntry serves GET /{slug}/-/info/entry?idx=42
 func (lib *library) handleInfoEntry(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	ze, ok := lib.archives[slug]
 	if !ok {
-		http.NotFound(w, r)
+		write404(w)
 		return
 	}
 
 	idxStr := r.URL.Query().Get("idx")
 	idx, err := strconv.ParseUint(idxStr, 10, 32)
 	if err != nil {
-		http.Error(w, "invalid idx parameter", http.StatusBadRequest)
+		writeBadRequest(w, "Invalid \u2018idx\u2019 parameter.")
 		return
 	}
 
 	a := ze.archive
 	e, err := a.EntryByIndex(uint32(idx))
 	if err != nil {
-		http.NotFound(w, r)
+		write404(w)
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Entry %d — %s</title>
-` + faviconLink + `
-<style>%s
-th { width: 160px; }
-</style></head><body>
-<h1><a href="/">📚 Library</a></h1><h2>Entry #%d — <a href="/%s/-/info">%s</a></h2>
-<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/%s/-/info">Info</a></div>
-<table>`,
-		idx, html.EscapeString(ze.title),
-		infoPageCSS,
-		idx, html.EscapeString(slug), html.EscapeString(ze.title),
-		html.EscapeString(slug))
-
-	fmt.Fprintf(w, `<tr><th>Index</th><td class="num">%d</td></tr>`, idx)
-	fmt.Fprintf(w, `<tr><th>Full Path</th><td class="mono">%s</td></tr>`, html.EscapeString(e.FullPath()))
-	fmt.Fprintf(w, `<tr><th>Namespace</th><td class="mono">%c</td></tr>`, e.Namespace())
-	fmt.Fprintf(w, `<tr><th>Path</th><td class="mono">%s</td></tr>`, html.EscapeString(e.Path()))
-	fmt.Fprintf(w, `<tr><th>Title</th><td>%s</td></tr>`, html.EscapeString(e.Title()))
-	fmt.Fprintf(w, `<tr><th>Is Redirect</th><td>%v</td></tr>`, e.IsRedirect())
+	data := infoEntryData{
+		Slug:         slug,
+		ArchiveTitle: ze.title,
+		EntryIdx:     idx,
+		FullPath:     e.FullPath(),
+		NS:           string(rune(e.Namespace())),
+		Path:         e.Path(),
+		EntryTitle:   e.Title(),
+		IsRedirect:   e.IsRedirect(),
+		HasPrev:      idx > 0,
+		HasNext:      idx+1 < uint64(a.EntryCount()),
+	}
+	if data.HasPrev {
+		data.PrevIdx = idx - 1
+	}
+	if data.HasNext {
+		data.NextIdx = idx + 1
+	}
 
 	if e.IsRedirect() {
 		if target, err := e.RedirectTarget(); err == nil {
-			targetLink := fmt.Sprintf("/%s/-/info/entry?idx=%d", html.EscapeString(slug), target.Index())
-			fmt.Fprintf(w, `<tr><th>Redirect Target</th><td><a href="%s">%s</a> (index %d)</td></tr>`,
-				targetLink, html.EscapeString(target.FullPath()), target.Index())
+			data.RedirectTarget = &entryRef{Index: target.Index(), FullPath: target.FullPath()}
 		}
 		if resolved, err := e.Resolve(); err == nil {
-			resolvedLink := fmt.Sprintf("/%s/-/info/entry?idx=%d", html.EscapeString(slug), resolved.Index())
-			fmt.Fprintf(w, `<tr><th>Resolves To</th><td><a href="%s">%s</a> (index %d)</td></tr>`,
-				resolvedLink, html.EscapeString(resolved.FullPath()), resolved.Index())
+			data.ResolvesTo = &entryRef{Index: resolved.Index(), FullPath: resolved.FullPath()}
 		}
 	} else {
-		mime := e.MIMEType()
-		if mime != "" {
-			fmt.Fprintf(w, `<tr><th>MIME Type</th><td class="mono">%s</td></tr>`, html.EscapeString(mime))
-		}
+		data.MIME = e.MIMEType()
 		if size, err := e.ContentSize(); err == nil {
-			fmt.Fprintf(w, `<tr><th>Content Size</th><td class="num">%s</td></tr>`, formatBytes(size))
+			data.HasSize = true
+			data.ContentSize = formatBytes(size)
 		}
 	}
 
-	fmt.Fprint(w, `</table>`)
-
-	// Action links
-	fmt.Fprint(w, `<div style="margin-top:16px">`)
 	if e.Namespace() == 'C' {
 		if e.IsRedirect() {
 			if resolved, err := e.Resolve(); err == nil {
-				fmt.Fprintf(w, `<a href="/%s/%s">View content (follows redirect)</a>`,
-					html.EscapeString(slug), html.EscapeString(resolved.Path()))
+				data.ViewLink = "/" + slug + "/" + resolved.Path()
 			}
 		} else {
-			fmt.Fprintf(w, `<a href="/%s/%s">View content</a>`,
-				html.EscapeString(slug), html.EscapeString(e.Path()))
+			data.ViewLink = "/" + slug + "/" + e.Path()
 		}
 	}
-	fmt.Fprint(w, `</div>`)
 
-	// Navigation: prev/next entries
-	fmt.Fprint(w, `<div class="pager">`)
-	if idx > 0 {
-		fmt.Fprintf(w, `<a href="/%s/-/info/entry?idx=%d">Previous entry (#%d)</a>`,
-			html.EscapeString(slug), idx-1, idx-1)
-	}
-	if uint32(idx+1) < a.EntryCount() {
-		fmt.Fprintf(w, `<a href="/%s/-/info/entry?idx=%d">Next entry (#%d)</a>`,
-			html.EscapeString(slug), idx+1, idx+1)
-	}
-	fmt.Fprint(w, `</div>`)
-
-	// Back link
-	nsLink := fmt.Sprintf("/%s/-/info/ns?ns=%c", html.EscapeString(slug), e.Namespace())
-	fmt.Fprintf(w, `<div class="nav"><a href="/%s/-/info">Back to info</a> · <a href="%s">Namespace %c</a></div>`,
-		html.EscapeString(slug), nsLink, e.Namespace())
-	fmt.Fprint(w, footerBarHTML())
-	fmt.Fprint(w, `</body></html>`)
+	renderWith(w, tmplInfoEntry, data)
 }
 
-// handleInfoCluster serves GET /{slug}/-/info/cluster — cluster navigator.
-// Without ?n= shows a paginated table of all clusters (no decompression).
-// With ?n=X shows detail for cluster X, including blobs and entries.
+// handleInfoCluster serves GET /{slug}/-/info/cluster[?n=X]
 func (lib *library) handleInfoCluster(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	ze, ok := lib.archives[slug]
 	if !ok {
-		http.NotFound(w, r)
+		write404(w)
 		return
 	}
 	a := ze.archive
 
 	nStr := r.URL.Query().Get("n")
 	if nStr != "" {
-		// --- Detail view ---
 		n64, err := strconv.ParseUint(nStr, 10, 32)
 		if err != nil || uint32(n64) >= a.ClusterCount() {
-			http.Error(w, "invalid cluster number", http.StatusBadRequest)
+			writeBadRequest(w, "Invalid cluster number.")
 			return
 		}
 		n := uint32(n64)
 
 		meta, err := a.ClusterMetaAt(n)
 		if err != nil {
-			http.Error(w, "failed to read cluster metadata: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("error reading cluster %d for %s: %v", n64, slug, err)
+			write500(w)
 			return
 		}
 
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Cluster %d — %s</title>
-` + faviconLink + `
-<style>%sth { width: 160px; }</style></head><body>
-<h1><a href="/">📚 Library</a></h1><h2>Cluster #%d — <a href="/%s/-/info">%s</a></h2>
-<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/%s/-/info">Info</a> · <a href="/%s/-/info/cluster">Clusters</a></div>`,
-			n, html.EscapeString(ze.title),
-			infoPageCSS,
-			n, html.EscapeString(slug), html.EscapeString(ze.title),
-			html.EscapeString(slug), html.EscapeString(slug))
-
-		fmt.Fprint(w, `<h2>Cluster Info</h2><table>`)
-		fmt.Fprintf(w, `<tr><th>Cluster #</th><td class="num">%d of %d</td></tr>`, n, a.ClusterCount())
-		fmt.Fprintf(w, `<tr><th>File Offset</th><td class="mono">0x%X (%d)</td></tr>`, meta.Offset, meta.Offset)
-		fmt.Fprintf(w, `<tr><th>Compressed Size</th><td>%s</td></tr>`, formatBytes(int64(meta.CompressedSize)))
-		fmt.Fprintf(w, `<tr><th>Compression</th><td class="mono">%s</td></tr>`, html.EscapeString(meta.Compression))
-		extStr := "No"
-		if meta.Extended {
-			extStr = "Yes"
+		data := infoClusterDetailData{
+			Slug:           slug,
+			ArchiveTitle:   ze.title,
+			N:              n,
+			ClusterCount:   a.ClusterCount(),
+			Offset:         meta.Offset,
+			CompressedSize: formatBytes(int64(meta.CompressedSize)),
+			Compression:    meta.Compression,
+			Extended:       meta.Extended,
+			HasPrev:        n > 0,
+			HasNext:        n+1 < a.ClusterCount(),
 		}
-		fmt.Fprintf(w, `<tr><th>Extended Offsets</th><td>%s</td></tr>`, extStr)
-		fmt.Fprint(w, `</table>`)
+		if data.HasPrev {
+			data.PrevN = n - 1
+		}
+		if data.HasNext {
+			data.NextN = n + 1
+		}
 
-		// Blobs (requires decompression)
 		blobSizes, blobErr := a.ClusterBlobSizes(n)
 		if blobErr != nil {
-			fmt.Fprintf(w, `<p style="color:#cf222e">Decompression failed: %s</p>`, html.EscapeString(blobErr.Error()))
+			data.BlobError = blobErr.Error()
 		} else {
 			totalDecomp := int64(0)
-			for _, s := range blobSizes {
+			blobs := make([]infoBlob, len(blobSizes))
+			for i, s := range blobSizes {
 				totalDecomp += int64(s)
+				blobs[i] = infoBlob{Index: i, Size: formatBytes(int64(s))}
 			}
-			fmt.Fprintf(w, `<h2>Blobs (%d total, %s decompressed)</h2>`, len(blobSizes), formatBytes(totalDecomp))
-			fmt.Fprint(w, `<table><tr><th style="width:80px">#</th><th style="text-align:right">Decompressed Size</th></tr>`)
-			for i, sz := range blobSizes {
-				fmt.Fprintf(w, `<tr><td class="num">%d</td><td class="num">%s</td></tr>`, i, formatBytes(int64(sz)))
-			}
-			fmt.Fprint(w, `</table>`)
+			data.BlobCount = len(blobSizes)
+			data.TotalDecomp = formatBytes(totalDecomp)
+			data.Blobs = blobs
 		}
 
-		// Entries in this cluster
 		entries, entErr := a.EntriesInCluster(n)
 		if entErr != nil {
-			fmt.Fprintf(w, `<p style="color:#cf222e">Error loading entries: %s</p>`, html.EscapeString(entErr.Error()))
-		} else if len(entries) > 0 {
-			fmt.Fprintf(w, `<h2>Entries (%d)</h2>`, len(entries))
-			fmt.Fprint(w, `<table><tr><th style="width:70px">Index</th><th>Path</th><th>Title</th></tr>`)
-			for _, e := range entries {
-				entryLink := fmt.Sprintf("/%s/-/info/entry?idx=%d", html.EscapeString(slug), e.Index())
-				var pathCell string
-				if e.Namespace() == 'C' {
-					pathCell = fmt.Sprintf(`<a href="/%s/%s">%s</a> <a href="%s" style="font-size:0.8em;color:#888" title="Entry details">&#x2139;&#xFE0E;</a>`,
-						html.EscapeString(slug), html.EscapeString(e.Path()), html.EscapeString(e.FullPath()), entryLink)
-				} else {
-					pathCell = fmt.Sprintf(`<a href="%s">%s</a>`, entryLink, html.EscapeString(e.FullPath()))
-				}
-				fmt.Fprintf(w, `<tr><td class="num">%d</td><td class="mono">%s</td><td>%s</td></tr>`,
-					e.Index(), pathCell, html.EscapeString(e.Title()))
-			}
-			fmt.Fprint(w, `</table>`)
+			data.EntryError = entErr.Error()
 		} else {
-			fmt.Fprint(w, `<p>No content entries in this cluster.</p>`)
+			clusterEntries := make([]infoClusterEntry, len(entries))
+			for i, e := range entries {
+				clusterEntries[i] = infoClusterEntry{
+					Index:     e.Index(),
+					FullPath:  e.FullPath(),
+					Path:      e.Path(),
+					Title:     e.Title(),
+					IsContent: e.Namespace() == 'C',
+				}
+			}
+			data.Entries = clusterEntries
 		}
 
-		// Prev/next cluster navigation
-		fmt.Fprint(w, `<div class="pager">`)
-		if n > 0 {
-			fmt.Fprintf(w, `<a href="/%s/-/info/cluster?n=%d">← Cluster #%d</a>`,
-				html.EscapeString(slug), n-1, n-1)
-		}
-		if n+1 < a.ClusterCount() {
-			fmt.Fprintf(w, `<a href="/%s/-/info/cluster?n=%d">Cluster #%d →</a>`,
-				html.EscapeString(slug), n+1, n+1)
-		}
-		fmt.Fprint(w, `</div>`)
-
-		fmt.Fprintf(w, `<div class="nav"><a href="/%s/-/info/cluster">Back to clusters</a> · <a href="/%s/-/info">Info</a></div>`,
-			html.EscapeString(slug), html.EscapeString(slug))
-		fmt.Fprint(w, footerBarHTML())
-	fmt.Fprint(w, `</body></html>`)
+		renderWith(w, tmplInfoClusterDetail, data)
 		return
 	}
 
-	// --- List view ---
+	// List view
 	offset, limit := parseOffsetLimit(r)
 	total := int(a.ClusterCount())
+	end := min(offset+limit, total)
 
-	type clusterRow struct {
-		num      uint32
-		offset   uint64
-		size     uint64
-		comp     string
-		extended bool
-		err      error
-	}
-	end := offset + limit
-	if end > total {
-		end = total
-	}
-	rows := make([]clusterRow, 0, end-offset)
+	rows := make([]infoClusterRow, 0, end-offset)
 	for i := offset; i < end; i++ {
 		meta, err := a.ClusterMetaAt(uint32(i))
 		if err != nil {
-			rows = append(rows, clusterRow{num: uint32(i), err: err})
+			rows = append(rows, infoClusterRow{Num: uint32(i), HasError: true, ErrMsg: err.Error()})
 		} else {
-			rows = append(rows, clusterRow{
-				num:      uint32(i),
-				offset:   meta.Offset,
-				size:     meta.CompressedSize,
-				comp:     meta.Compression,
-				extended: meta.Extended,
+			rows = append(rows, infoClusterRow{
+				Num:      uint32(i),
+				Offset:   meta.Offset,
+				Size:     formatBytes(int64(meta.CompressedSize)),
+				Comp:     meta.Compression,
+				Extended: meta.Extended,
 			})
 		}
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Clusters — %s</title>
-` + faviconLink + `
-<style>%s</style></head><body>
-<h1><a href="/">📚 Library</a></h1><h2>Clusters — <a href="/%s/-/info">%s</a></h2>
-<div class="nav" style="margin-top:-6px;margin-bottom:16px"><a href="/">Library</a> · <a href="/%s/-/info">Info</a></div>
-<p class="count">%d clusters total</p>`,
-		html.EscapeString(ze.title),
-		infoPageCSS,
-		html.EscapeString(slug), html.EscapeString(ze.title),
-		html.EscapeString(slug),
-		total)
-
-	fmt.Fprint(w, `<table><tr><th style="width:60px">#</th><th>Offset</th><th style="text-align:right">Compressed Size</th><th>Compression</th><th>Extended</th></tr>`)
-	for _, row := range rows {
-		if row.err != nil {
-			fmt.Fprintf(w, `<tr><td class="num"><a href="/%s/-/info/cluster?n=%d">%d</a></td><td colspan="4" style="color:#cf222e">%s</td></tr>`,
-				html.EscapeString(slug), row.num, row.num, html.EscapeString(row.err.Error()))
-			continue
-		}
-		extStr := ""
-		if row.extended {
-			extStr = "yes"
-		}
-		fmt.Fprintf(w, `<tr><td class="num"><a href="/%s/-/info/cluster?n=%d">%d</a></td><td class="mono">0x%X</td><td class="num">%s</td><td class="mono">%s</td><td>%s</td></tr>`,
-			html.EscapeString(slug), row.num, row.num,
-			row.offset, formatBytes(int64(row.size)),
-			html.EscapeString(row.comp), extStr)
-	}
-	fmt.Fprint(w, `</table>`)
-
-	baseURL := fmt.Sprintf("/%s/-/info/cluster", html.EscapeString(slug))
-	fmt.Fprint(w, `<div class="pager">`)
-	if offset > 0 {
-		prev := offset - limit
-		if prev < 0 {
-			prev = 0
-		}
-		fmt.Fprintf(w, `<a href="%s?offset=%d&limit=%d">Previous</a>`, baseURL, prev, limit)
-	}
-	if end < total {
-		fmt.Fprintf(w, `<a href="%s?offset=%d&limit=%d">Next</a>`, baseURL, offset+limit, limit)
-	}
-	fmt.Fprint(w, `</div>`)
-
-	fmt.Fprintf(w, `<div class="nav"><a href="/%s/-/info">Back to info</a></div>`,
-		html.EscapeString(slug))
-	fmt.Fprint(w, footerBarHTML())
-	fmt.Fprint(w, `</body></html>`)
+	renderWith(w, tmplInfoClusterList, infoClusterListData{
+		Slug:       slug,
+		Title:      ze.title,
+		Total:      total,
+		Rows:       rows,
+		HasPrev:    offset > 0,
+		HasNext:    end < total,
+		PrevOffset: max(offset-limit, 0),
+		NextOffset: offset + limit,
+		Limit:      limit,
+	})
 }
 
 func formatBytes(b int64) string {

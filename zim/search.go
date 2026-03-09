@@ -12,6 +12,8 @@ import (
 // iterate k results.
 //
 // An empty prefix iterates all entries in the namespace in title order.
+// Iteration stops at the first parse error; use [Archive.AllEntriesByTitlePrefix]
+// for error-aware iteration.
 func (a *Archive) EntriesByTitlePrefix(ns byte, prefix string) iter.Seq[Entry] {
 	return func(yield func(Entry) bool) {
 		count := a.titleCount()
@@ -50,15 +52,57 @@ func (a *Archive) EntriesByTitlePrefix(ns byte, prefix string) iter.Seq[Entry] {
 	}
 }
 
+// AllEntriesByTitlePrefix is like [Archive.EntriesByTitlePrefix] but
+// error-aware. Each step yields (entry, nil) on success or (Entry{}, err) on
+// the first parse error, after which iteration stops.
+func (a *Archive) AllEntriesByTitlePrefix(ns byte, prefix string) iter.Seq2[Entry, error] {
+	return func(yield func(Entry, error) bool) {
+		count := a.titleCount()
+		lo, hi := uint32(0), count
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			e, err := a.entryByTitleIndex(mid)
+			if err != nil {
+				yield(Entry{}, err)
+				return
+			}
+			if compareTitleKey(e.Namespace(), e.Title(), ns, prefix) < 0 {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+
+		for i := lo; i < count; i++ {
+			e, err := a.entryByTitleIndex(i)
+			if err != nil {
+				yield(Entry{}, err)
+				return
+			}
+			if e.Namespace() != ns {
+				return
+			}
+			if !strings.HasPrefix(e.Title(), prefix) {
+				return
+			}
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
+}
+
 // EntriesByTitlePrefixFold is like EntriesByTitlePrefix but case-insensitive
 // using Unicode simple case folding. Because the title list is sorted
 // case-sensitively, this requires a full linear scan — O(N). Prefer
 // EntriesByTitlePrefix when case sensitivity is acceptable.
+// Iteration stops at the first parse error; use [Archive.AllEntriesByTitlePrefixFold]
+// for error-aware iteration.
 func (a *Archive) EntriesByTitlePrefixFold(ns byte, prefix string) iter.Seq[Entry] {
 	folded := strings.ToLower(prefix)
 	return func(yield func(Entry) bool) {
 		count := a.titleCount()
-		for i := uint32(0); i < count; i++ {
+		for i := range count {
 			e, err := a.entryByTitleIndex(i)
 			if err != nil {
 				return
@@ -68,6 +112,31 @@ func (a *Archive) EntriesByTitlePrefixFold(ns byte, prefix string) iter.Seq[Entr
 			}
 			if hasPrefixFold(e.Title(), folded) {
 				if !yield(e) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// AllEntriesByTitlePrefixFold is like [Archive.EntriesByTitlePrefixFold] but
+// error-aware. Each step yields (entry, nil) on success or (Entry{}, err) on
+// the first parse error, after which iteration stops.
+func (a *Archive) AllEntriesByTitlePrefixFold(ns byte, prefix string) iter.Seq2[Entry, error] {
+	folded := strings.ToLower(prefix)
+	return func(yield func(Entry, error) bool) {
+		count := a.titleCount()
+		for i := range count {
+			e, err := a.entryByTitleIndex(i)
+			if err != nil {
+				yield(Entry{}, err)
+				return
+			}
+			if e.Namespace() != ns {
+				continue
+			}
+			if hasPrefixFold(e.Title(), folded) {
+				if !yield(e, nil) {
 					return
 				}
 			}

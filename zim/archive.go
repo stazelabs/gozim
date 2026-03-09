@@ -14,6 +14,10 @@ const defaultCacheSize = 16
 // Any cluster claiming to be larger than this in a ZIM file is treated as corrupt.
 const maxClusterSize = 4 << 30 // 4 GiB
 
+// maxMIMEListSize is the upper bound on the MIME type list size (1 MiB).
+// Real MIME lists are a few KB; this cap prevents OOM on malformed files.
+const maxMIMEListSize = 1 << 20 // 1 MiB
+
 // Archive represents an opened ZIM file.
 type Archive struct {
 	r         reader
@@ -127,17 +131,21 @@ func (a *Archive) init() error {
 		return err
 	}
 
-	// Read MIME type list
-	// The MIME list starts at MIMEListPos and ends at the first double-null.
-	// We read a reasonable chunk and parse it.
+	// Read MIME type list.
+	// Per the ZIM spec the MIME list occupies [MIMEListPos, URLPtrPos).
+	// Use that exact range rather than a hardcoded chunk so we neither
+	// waste memory on tiny files nor truncate an unusually large list.
 	mimeStart := int64(a.hdr.MIMEListPos)
-	// Read up to 64KB for MIME list (more than enough)
-	maxMIME := int64(65536)
-	end := mimeStart + maxMIME
-	if end > a.r.Size() {
-		end = a.r.Size()
+	urlPtrStart := int64(a.hdr.URLPtrPos)
+	if urlPtrStart < mimeStart {
+		return fmt.Errorf("zim: URLPtrPos (%d) precedes MIMEListPos (%d)", urlPtrStart, mimeStart)
 	}
-	mimeBuf := make([]byte, end-mimeStart)
+	mimeLen := urlPtrStart - mimeStart
+	// Sanity cap: real MIME lists are a few KB; 1 MiB is extremely generous.
+	if mimeLen > maxMIMEListSize {
+		return fmt.Errorf("zim: MIME list size %d exceeds limit (%d)", mimeLen, maxMIMEListSize)
+	}
+	mimeBuf := make([]byte, mimeLen)
 	if _, err := a.r.ReadAt(mimeBuf, mimeStart); err != nil {
 		return fmt.Errorf("zim: read MIME list: %w", err)
 	}
@@ -174,7 +182,12 @@ func (a *Archive) loadTitleListing() error {
 		count := len(data) / 4
 		a.titleList = make([]uint32, count)
 		for i := range a.titleList {
-			a.titleList[i] = binary.LittleEndian.Uint32(data[i*4 : i*4+4])
+			idx := binary.LittleEndian.Uint32(data[i*4 : i*4+4])
+			if idx >= a.hdr.EntryCount {
+				return fmt.Errorf("zim: title listing %s: index %d at position %d out of range (entry count %d)",
+					path, idx, i, a.hdr.EntryCount)
+			}
+			a.titleList[i] = idx
 		}
 		return nil
 	}
@@ -353,14 +366,34 @@ func (a *Archive) entryByTitleIndex(idx uint32) (Entry, error) {
 }
 
 // EntriesByTitle returns an iterator over all entries sorted by title.
+// Iteration stops at the first parse error; use [Archive.AllEntriesByTitle]
+// for error-aware iteration.
 func (a *Archive) EntriesByTitle() iter.Seq[Entry] {
 	return func(yield func(Entry) bool) {
-		for i := uint32(0); i < a.titleCount(); i++ {
+		for i := range a.titleCount() {
 			e, err := a.entryByTitleIndex(i)
 			if err != nil {
 				return
 			}
 			if !yield(e) {
+				return
+			}
+		}
+	}
+}
+
+// AllEntriesByTitle returns an error-aware iterator over all entries sorted by
+// title. Each step yields (entry, nil) on success or (Entry{}, err) on the
+// first parse error, after which iteration stops.
+func (a *Archive) AllEntriesByTitle() iter.Seq2[Entry, error] {
+	return func(yield func(Entry, error) bool) {
+		for i := range a.titleCount() {
+			e, err := a.entryByTitleIndex(i)
+			if err != nil {
+				yield(Entry{}, err)
+				return
+			}
+			if !yield(e, nil) {
 				return
 			}
 		}
@@ -603,7 +636,7 @@ func (a *Archive) EntriesInCluster(n uint32) ([]Entry, error) {
 		return nil, fmt.Errorf("zim: cluster %d out of range", n)
 	}
 	var result []Entry
-	for i := uint32(0); i < a.hdr.EntryCount; i++ {
+	for i := range a.hdr.EntryCount {
 		e, err := a.EntryByIndex(i)
 		if err != nil {
 			return nil, err

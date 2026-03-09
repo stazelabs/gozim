@@ -1,0 +1,48 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - misspell
+    - unconvert
+    - unparam
+    - bodyclose
+    - errorlint
+    - nilerr
+    - forcetypeassert
+    - intrange
+    - modernize
+  settings:
+    errcheck:
+      exclude-functions:
+        # HTTP handler writes — errors can't be acted upon after headers are sent
+        - (net/http.ResponseWriter).Write
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*encoding/json.Encoder).Encode
+        - io.Copy
+  exclusions:
+    rules:
+      # Ignore errcheck on defer Close() — idiomatic Go pattern
+      - linters: [errcheck]
+        text: "Error return value of `.*\\.Close` is not checked"
+      # Relax errcheck in test files
+      - linters: [errcheck]
+        path: "_test\\.go"
+      # io.EOF is a sentinel never wrapped by stdlib; == comparison is safe
+      - linters: [errorlint]
+        text: "comparing with .* will fail on wrapped errors"
+        path: "_test\\.go"
+      # Test helpers may not exercise all parameters
+      - linters: [unparam]
+        path: "_test\\.go"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
