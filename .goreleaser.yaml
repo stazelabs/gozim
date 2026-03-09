@@ -5,7 +5,7 @@ project_name: gozim
 before:
   hooks:
     - go mod tidy
-    - cd cmd && go mod tidy
+    - sh -c "cd cmd && go mod tidy"
 
 builds:
   - id: zimcat
