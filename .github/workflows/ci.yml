@@ -32,7 +32,8 @@ jobs:
           Invoke-WebRequest -Uri "https://github.com/openzim/zim-testing-suite/raw/main/data/nons/small.zim" -OutFile testdata/small.zim
         shell: pwsh
 
-      - run: go test -race ./... -count=1
+      - run: go test -race ./zim/ -count=1
+      - run: cd cmd && go test -race ./... -count=1
 
   lint:
     name: lint
@@ -48,6 +49,13 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: "v2.11"
+          args: ./zim/
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: "v2.11"
+          args: ./...
+          working-directory: cmd
 
   build:
     name: build
@@ -76,7 +84,7 @@ jobs:
       - name: Download testdata
         run: make testdata
 
-      - run: go test -coverprofile=coverage.out -covermode=atomic ./...
+      - run: go test -coverprofile=coverage.out -covermode=atomic ./zim/
 
       - uses: codecov/codecov-action@v4
         with:

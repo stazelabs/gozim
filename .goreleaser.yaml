@@ -5,10 +5,12 @@ project_name: gozim
 before:
   hooks:
     - go mod tidy
+    - cd cmd && go mod tidy
 
 builds:
   - id: zimcat
-    main: ./cmd/zimcat
+    dir: cmd
+    main: ./zimcat
     binary: zimcat
     env:
       - CGO_ENABLED=0
@@ -16,7 +18,8 @@ builds:
     goarch: [amd64, arm64]
 
   - id: ziminfo
-    main: ./cmd/ziminfo
+    dir: cmd
+    main: ./ziminfo
     binary: ziminfo
     env:
       - CGO_ENABLED=0
@@ -24,7 +27,8 @@ builds:
     goarch: [amd64, arm64]
 
   - id: zimsearch
-    main: ./cmd/zimsearch
+    dir: cmd
+    main: ./zimsearch
     binary: zimsearch
     env:
       - CGO_ENABLED=0
@@ -32,7 +36,8 @@ builds:
     goarch: [amd64, arm64]
 
   - id: zimserve
-    main: ./cmd/zimserve
+    dir: cmd
+    main: ./zimserve
     binary: zimserve
     env:
       - CGO_ENABLED=0
@@ -40,7 +45,8 @@ builds:
     goarch: [amd64, arm64]
 
   - id: zimverify
-    main: ./cmd/zimverify
+    dir: cmd
+    main: ./zimverify
     binary: zimverify
     env:
       - CGO_ENABLED=0
