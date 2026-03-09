@@ -84,11 +84,15 @@ jobs:
       - name: Download testdata
         run: make testdata
 
-      - run: go test -coverprofile=coverage.out -covermode=atomic ./zim/
+      - name: Coverage — zim library
+        run: go test -coverprofile=coverage-zim.out -covermode=atomic ./zim/
+
+      - name: Coverage — cmd tools
+        run: cd cmd && go test -coverprofile=../coverage-cmd.out -covermode=atomic ./...
 
       - uses: codecov/codecov-action@v4
         with:
-          files: coverage.out
+          files: coverage-zim.out,coverage-cmd.out
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 

@@ -39,11 +39,13 @@ clean:
 	rm -f ziminfo zimcat zimserve zimsearch zimverify
 
 cover:
-	go test -coverprofile=coverage.out -covermode=atomic ./zim/
-	go tool cover -func=coverage.out
+	go test -coverprofile=coverage-zim.out -covermode=atomic ./zim/
+	cd cmd && go test -coverprofile=../coverage-cmd.out -covermode=atomic ./...
+	@echo "=== zim library ===" && go tool cover -func=coverage-zim.out | tail -1
+	@echo "=== cmd tools ===" && go tool cover -func=coverage-cmd.out | tail -1
 
 cover-html: cover
-	go tool cover -html=coverage.out
+	go tool cover -html=coverage-zim.out
 
 testdata: testdata/small.zim
 

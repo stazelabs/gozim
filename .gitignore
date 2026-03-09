@@ -10,7 +10,7 @@
 /*.test
 
 # Coverage output
-coverage.out
+coverage*.out
 
 # Test data (large ZIM files)
 testdata/*.zim
